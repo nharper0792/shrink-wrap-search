@@ -28,9 +28,6 @@ METHOD_LABELS = {
     "angular": "Angular Sort (wedge)",
     "shrinkwrap": "Shrink-Wrap (vacuum bag)",
 }
-# ordinal-safe steps only (skip the near-surface steps so revealed points stay legible)
-SEQUENTIAL_BLUES = ["#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#104281", "#0d366b"]
-
 
 def _style_ax(ax, equal=True):
     ax.set_facecolor(SURFACE)
@@ -139,27 +136,15 @@ def animate_angular_sweep(points, save_path, clockwise=True, fps=20, frames=180)
 
 
 # ---------------------------------------------------------------------------
-# Approach 2 animation: shrink-wrap peeling by recursion depth
+# Approach 2 animation: circle shrinks uniformly, contacting points in order
+# of decreasing distance from the centroid; each new point is spliced into
+# the loop at the edge where it forms the shallowest triangle.
 # ---------------------------------------------------------------------------
 
-def _depth_per_point(trace, n):
-    depth = np.zeros(n, dtype=int)
-    for entry in trace:
-        for i in entry["hull"]:
-            depth[i] = entry["depth"]
-    return depth
-
-
-def animate_shrink_wrap(points, tour, trace, save_path, fps=2, hold_frames=1):
+def animate_shrink_wrap(points, tour, trace, save_path, fps=1.5, hold_frames=1):
     n = len(points)
     c, r = bounding_circle(points)
-    depth = _depth_per_point(trace, n)
-    max_depth = max(1, int(depth.max()))
-    ramp = SEQUENTIAL_BLUES
-
-    def color_for_depth(d):
-        idx = int(round((d / max_depth) * (len(ramp) - 1)))
-        return ramp[idx]
+    dists = np.linalg.norm(points - c, axis=1)
 
     fig, ax = plt.subplots(figsize=(6, 6), facecolor=SURFACE)
     _style_ax(ax)
@@ -168,36 +153,46 @@ def animate_shrink_wrap(points, tour, trace, save_path, fps=2, hold_frames=1):
     ax.set_ylim(c[1] - r - pad, c[1] + r + pad)
     ax.set_xticks([])
     ax.set_yticks([])
-    ax.set_title("Shrink-Wrap: outer points stick first, membrane sinks into each pocket", fontsize=10.5, color=INK)
+    ax.set_title("Shrink-Wrap: circle contacts points far-to-near, each snaps in at its\nshallowest-triangle edge",
+                 fontsize=10.5, color=INK)
 
     shrink_circle = patches.Circle(c, r * 1.08, fill=False, linestyle="--", linewidth=1.3,
                                     edgecolor=INK_MUTED, zorder=1)
     ax.add_patch(shrink_circle)
 
-    scat = ax.scatter(points[:, 0], points[:, 1], s=26, color=INK_MUTED, zorder=3,
+    (tri_line,) = ax.plot([], [], color=METHOD_COLORS["shrinkwrap"], linewidth=1.1,
+                          linestyle=":", alpha=0.7, zorder=3)
+    scat = ax.scatter(points[:, 0], points[:, 1], s=26, color=INK_MUTED, zorder=4,
                        edgecolors=SURFACE, linewidths=0.8)
-    (path_line,) = ax.plot([], [], color=METHOD_COLORS["shrinkwrap"], linewidth=2.2, zorder=4)
+    (path_line,) = ax.plot([], [], color=METHOD_COLORS["shrinkwrap"], linewidth=2.2, zorder=5)
 
-    n_frames = n * hold_frames
+    n_frames = len(trace) * hold_frames
 
     def update(frame):
-        k = min(n, frame // hold_frames + 1)
-        revealed = tour[:k]
-        pts = points[revealed]
-        path_line.set_data(pts[:, 0], pts[:, 1])
-        if k == n:
-            closed = points[tour + [tour[0]]]
-            path_line.set_data(closed[:, 0], closed[:, 1])
+        idx = min(len(trace) - 1, frame // hold_frames)
+        entry = trace[idx]
+        path = entry["path"]
 
-        colors = [
-            color_for_depth(depth[i]) if i in revealed else INK_MUTED
-            for i in range(n)
-        ]
+        closed = points[path + [path[0]]]
+        path_line.set_data(closed[:, 0], closed[:, 1])
+
+        revealed_set = set(path)
+        sizes = [90 if i == entry["inserted"] else 26 for i in range(n)]
+        colors = [METHOD_COLORS["shrinkwrap"] if i in revealed_set else INK_MUTED for i in range(n)]
         scat.set_color(colors)
+        scat.set_sizes(sizes)
 
-        cur_depth = max((depth[i] for i in revealed), default=0)
-        shrink_circle.set_radius(r * 1.08 * (1 - 0.55 * cur_depth / max_depth))
-        return scat, path_line, shrink_circle
+        if entry["edge"] is not None:
+            a, b = entry["edge"]
+            tri = points[[a, entry["inserted"], b, a]]
+            tri_line.set_data(tri[:, 0], tri[:, 1])
+            radius = dists[entry["inserted"]]
+        else:
+            tri_line.set_data([], [])
+            radius = r
+        shrink_circle.set_radius(radius * 1.08)
+
+        return scat, path_line, shrink_circle, tri_line
 
     anim = FuncAnimation(fig, update, frames=n_frames, interval=1000 / fps, blit=True)
     anim.save(save_path, writer=PillowWriter(fps=fps))

@@ -4,7 +4,6 @@ import math
 import numpy as np
 
 from .geometry import tour_length
-from .hull import convex_hull_indices
 
 
 # ---------------------------------------------------------------------------
@@ -33,81 +32,63 @@ def bounding_circle(points):
 # ---------------------------------------------------------------------------
 # Approach 2: shrink-wrap ("vacuum bag") heuristic
 #
-# Physically: a membrane shrinks onto the point set from the outside. It
-# first conforms to the convex hull (the points it reaches first), sticks
-# there, and then keeps sinking into each "pocket" between consecutive
-# stuck points, conforming to the convex hull of whatever points are left
-# in that pocket, recursively, until every point is stuck to the membrane.
-#
-# This is equivalent to recursive convex-hull peeling, where the remaining
-# (interior) points are assigned to a pocket by which pair of hull vertices
-# their angle (measured from the hull's own centroid) falls between.
+# Physically: a circle centered on the centroid shrinks inward uniformly, so
+# it contacts points strictly in order of decreasing distance from the
+# centroid (the farthest point sticks first, the closest sticks last). Each
+# newly-stuck point gets spliced into the loop of already-stuck points at
+# whichever edge it forms the shallowest triangle with -- shallowness is the
+# point's perpendicular distance to that edge *segment* (clamped to the
+# segment, not the infinite line through it, so a point can't claim an edge
+# it isn't actually near just because it's collinear with the edge's line).
+# The membrane deforms least where the new point barely pokes above the
+# nearest existing surface, and that's where it catches.
 # ---------------------------------------------------------------------------
 
-def _bucket_by_wedge(points, hull, interior, c):
-    hull_angles = [math.atan2(points[h][1] - c[1], points[h][0] - c[0]) for h in hull]
-    hull_angles = [a % (2 * math.pi) for a in hull_angles]
-    pockets = [[] for _ in hull]
-    m = len(hull)
-    for p in interior:
-        a = math.atan2(points[p][1] - c[1], points[p][0] - c[0]) % (2 * math.pi)
-        placed = False
-        for e in range(m):
-            lo = hull_angles[e]
-            hi = hull_angles[(e + 1) % m]
-            span = (hi - lo) % (2 * math.pi)
-            if span == 0:
-                span = 2 * math.pi
-            offset = (a - lo) % (2 * math.pi)
-            if offset <= span:
-                pockets[e].append(p)
-                placed = True
-                break
-        if not placed:
-            pockets[-1].append(p)
-    return pockets
-
-
-def _shrink_wrap_recursive(points, idx, trace, depth):
-    if len(idx) <= 2:
-        order = list(idx)
-        trace.append({"depth": depth, "hull": order, "pockets": {}, "centroid": None})
-        return order
-
-    hull = convex_hull_indices(points, idx)
-
-    if len(hull) < 3 or len(hull) == len(idx):
-        order = hull if len(hull) == len(idx) else sorted(idx, key=lambda i: (points[i][0], points[i][1]))
-        trace.append({"depth": depth, "hull": order, "pockets": {}, "centroid": None})
-        return order
-
-    hull_set = set(hull)
-    interior = [i for i in idx if i not in hull_set]
-    c = points[hull].mean(axis=0)
-    pockets = _bucket_by_wedge(points, hull, interior, c)
-
-    trace.append({
-        "depth": depth,
-        "hull": list(hull),
-        "pockets": {e: list(pockets[e]) for e in range(len(hull)) if pockets[e]},
-        "centroid": c,
-    })
-
-    tour = []
-    for e, h in enumerate(hull):
-        tour.append(h)
-        if pockets[e]:
-            tour.extend(_shrink_wrap_recursive(points, pockets[e], trace, depth + 1))
-    return tour
+def _triangle_height(points, p, a, b):
+    ax, ay = points[a]
+    bx, by = points[b]
+    px, py = points[p]
+    abx, aby = bx - ax, by - ay
+    seg_len2 = abx * abx + aby * aby
+    if seg_len2 < 1e-12:
+        return math.hypot(px - ax, py - ay)
+    t = ((px - ax) * abx + (py - ay) * aby) / seg_len2
+    t = max(0.0, min(1.0, t))
+    projx, projy = ax + t * abx, ay + t * aby
+    return math.hypot(px - projx, py - projy)
 
 
 def shrink_wrap_tour(points, return_trace=False):
-    idx = list(range(len(points)))
-    trace = []
-    tour = _shrink_wrap_recursive(points, idx, trace, depth=0)
+    n = len(points)
+    if n <= 3:
+        tour = list(range(n))
+        trace = [{"step": 0, "inserted": None, "edge": None, "path": list(tour)}]
+        if return_trace:
+            return tour, trace
+        return tour
+
+    c = points.mean(axis=0)
+    dists = np.linalg.norm(points - c, axis=1)
+    order = np.argsort(-dists).tolist()  # farthest first: contact order of a shrinking circle
+
+    path = order[:3]
+    trace = [{"step": 0, "inserted": None, "edge": None, "path": list(path)}]
+
+    for step, p in enumerate(order[3:], start=1):
+        m = len(path)
+        best_i, best_h = 0, math.inf
+        for i in range(m):
+            a, b = path[i], path[(i + 1) % m]
+            h = _triangle_height(points, p, a, b)
+            if h < best_h:
+                best_h, best_i = h, i
+        a, b = path[best_i], path[(best_i + 1) % m]
+        path.insert(best_i + 1, p)
+        trace.append({"step": step, "inserted": p, "edge": (a, b), "path": list(path)})
+
     if return_trace:
-        return tour, trace
-    return tour
+        return path, trace
+    return path
 
 
 # ---------------------------------------------------------------------------

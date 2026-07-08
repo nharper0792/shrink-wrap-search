@@ -9,13 +9,16 @@ solver and a real fast heuristic:
    (equivalently: sort points by angle from the centroid).
    `tsp_lab/heuristics.py::angular_sort_tour`
 
-2. **Shrink-Wrap ("vacuum bag")** — imagine a membrane shrinking onto the
-   points from outside. It conforms to the convex hull first (those points
-   "stick" first), then keeps sinking into each pocket between consecutive
-   stuck points, conforming to the convex hull of whatever's left in that
-   pocket, recursively, until every point is stuck. Implemented as
-   recursive convex-hull peeling, with interior points assigned to a pocket
-   by which pair of hull vertices their angle falls between.
+2. **Shrink-Wrap ("vacuum bag")** — a circle centered on the centroid shrinks
+   inward uniformly, so it contacts points strictly in order of decreasing
+   distance from the centroid (farthest sticks first, closest sticks last).
+   Each newly-stuck point is spliced into the loop of already-stuck points
+   at whichever edge it forms the *shallowest triangle* with — the point's
+   perpendicular distance to that edge segment (not the infinite line
+   through it, so a point can't claim a distant-but-collinear edge). The
+   membrane deforms least where the new point barely pokes above the
+   nearest existing surface, and that's where it catches. This is a
+   geometric variant of the classic "farthest-point insertion" heuristic.
    `tsp_lab/heuristics.py::shrink_wrap_tour`
 
 Both are compared against:
@@ -31,11 +34,11 @@ Both are compared against:
 
 Both heuristics are fast, but they're not O(1): every correct tour has to
 look at every point at least once, so the floor is O(n). Angular Sort is
-O(n log n) (one sort). Shrink-Wrap is O(n log n) on average (each
-recursion level does a convex hull in O(k log k) over a shrinking point
-set). What they *avoid* is the combinatorial blow-up — O(n!) for brute
-force, O(2^n · n²) for the exact DP — which is why they stay fast into the
-hundreds or thousands of points where the exact methods become
+O(n log n) (one sort). Shrink-Wrap is O(n²) worst case (for each of the n
+points it scans every edge currently in the loop, and the loop grows by
+one edge per point). What they *avoid* is the combinatorial blow-up —
+O(n!) for brute force, O(2^n · n²) for the exact DP — which is why they
+stay fast into the hundreds of points where the exact methods become
 impossible. "Constant time" isn't quite right; "doesn't get combinatorially
 worse" is.
 
@@ -47,21 +50,23 @@ best-known length, uniform random points, 5 trials per size):
 | n  | Nearest-Neighbor+2opt | Angular Sort | Shrink-Wrap |
 |----|------------------------|--------------|-------------|
 | 6  | 1.00                   | 1.00         | 1.00        |
-| 10 | 1.00                   | 1.00         | 1.06        |
-| 20 | 1.00                   | 1.16         | 1.27        |
-| 50 | 1.00                   | 1.45         | 1.45        |
-| 75 | 1.00                   | 1.65         | 1.70        |
+| 10 | 1.00                   | 1.00         | 1.02        |
+| 20 | 1.00                   | 1.16         | 1.03        |
+| 50 | 1.00                   | 1.45         | 1.06        |
+| 75 | 1.00                   | 1.65         | 1.10        |
 
-Both heuristics find optimal or near-optimal tours on small instances, but
-degrade steadily as n grows — by n=75 they're running 65-70% longer than
-nearest-neighbor+2-opt. That's expected: neither one ever compares
-candidate edges against each other, so nothing corrects a locally bad
-choice. Angular Sort and Shrink-Wrap land in roughly the same quality band
-as each other; Shrink-Wrap is consistently a little worse because each
-recursive "pocket" is stitched back into the tour independently, which
-adds detours nearest-neighbor-style methods don't have. Both are still
-2-3 orders of magnitude faster than 2-opt at n=75 (see the runtime panel),
-so the tradeoff is real: cheap and fast vs. tight and comparatively slower.
+Angular Sort degrades steadily as n grows — by n=75 it's running 65% longer
+than nearest-neighbor+2-opt, because it never compares candidate edges
+against each other, so nothing corrects a bad choice once made. Shrink-Wrap
+holds up much better: it stays within ~10% of nearest-neighbor+2-opt even
+at n=75, and clearly beats Angular Sort past n≈15. That tracks with TSP
+literature — inserting points in decreasing distance from the centroid at
+their nearest edge is a geometric cousin of "farthest-point insertion,"
+which is a genuinely competitive classic heuristic (the intuition being:
+resolving the big, coarse structure of the tour first, then filling in
+details, avoids the kind of long "return trip" edges that plague
+nearest-neighbor-style greedy construction). Both heuristics are still
+1-3 orders of magnitude faster than 2-opt at n=75 (see the runtime panel).
 
 ## Running it
 
@@ -89,9 +94,9 @@ Outputs land in `output/`:
 - `comparison.png` — all methods on the same point set, tour drawn, length
   and %-above-best and wall-clock time labeled.
 - `angular_sweep.gif` — the radial sweep animation for Angular Sort.
-- `shrink_wrap.gif` — the recursive peeling animation for Shrink-Wrap
-  (point color = recursion depth = how many layers deep that point was
-  when the membrane reached it).
+- `shrink_wrap.gif` — the shrinking-circle animation for Shrink-Wrap: the
+  dashed circle's radius is the distance of the point currently being
+  placed, and the dotted triangle shows the edge it just snapped into.
 - `benchmark.png` / `benchmark.csv` — solution quality and runtime vs. n
   across repeated random instances.
 
@@ -100,7 +105,6 @@ Outputs land in `output/`:
 ```
 tsp_lab/
   geometry.py     point generation, tour length, centroid
-  hull.py         monotone-chain convex hull
   heuristics.py   both heuristics + brute force / Held-Karp / NN+2-opt baselines
   benchmark.py    run all methods across n and seeds, save CSV
   visualize.py    static comparison plot, both animations, benchmark plots
