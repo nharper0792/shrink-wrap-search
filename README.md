@@ -86,6 +86,8 @@ single leg. What they *avoid* is the combinatorial blow-up — O(n!) for
 brute force, O(2^n · n²) for the exact DP — which is why they stay fast
 into the hundreds of points where the exact methods become impossible.
 "Constant time" isn't quite right; "doesn't get combinatorially worse" is.
+Shrink-Wrap's O(n²) *is* a removable implementation cost, though, not a
+fundamental one — see "Round 3" below, which gets it down to O(n).
 
 ## What the numbers actually show
 
@@ -190,6 +192,45 @@ original idea — improves the most in relative terms (65% too long →
 essentially optimal) because it started from the simplest, most
 easily-corrected construction.
 
+## Round 3: can Shrink-Wrap run in O(1)?
+
+No — placing n points is at least Ω(n) work no matter what, since writing
+down an n-point tour takes n steps by itself. But `shrink_wrap_tour` is
+O(n²), not because it has to be, but because of two removable costs: each
+insertion (a) scans *every* edge currently in the path to find the
+shallowest one, and (b) splices into a Python list with `.insert()`, which
+is itself O(path length) since everything after it has to shift.
+
+`shrink_wrap_gridded_tour` (`tsp_lab/heuristics.py`) fixes both: the path
+is a doubly-linked list (O(1) splice), and each insertion only checks the
+edges incident to a fixed number of nearby already-placed points (found via
+a uniform spatial grid, sized once up front), instead of the whole path.
+That candidate count is a hard cap — genuinely O(1) per step, not just
+small — so the algorithm is O(n) overall. Verified empirically
+(`scaling_test.py`, `output/scaling.png`): candidates examined per
+insertion stay pinned at ~8 regardless of n (measured from n=50 to
+n=6400), and wall-clock time diverges from the O(n²) baseline exactly like
+a textbook n vs. n² comparison — 51× faster by n=6400 (1.4s vs. 71.6s),
+and the gridded version keeps going past n=50,000 (24s) where the baseline
+would take roughly two hours (quadratic extrapolation from the n=6400
+point).
+
+| n | baseline (O(n²)) | gridded (O(n)) | speedup | quality vs. baseline |
+|---|---|---|---|---|
+| 400 | 0.29s | 0.05s | 5.9× | 1.20× |
+| 1,600 | 4.37s | 0.24s | 18.1× | 1.19× |
+| 6,400 | 71.6s | 1.40s | 51.0× | 1.15× |
+| 51,200 | ~2h (extrapolated) | 24.0s | — | — |
+
+The cost: capping the search means it's no longer guaranteed to find the
+globally shallowest edge, only the best one nearby, so tour length runs
+about 5-20% longer than the full O(n²) search — but that cost stays in a
+stable band as n grows rather than compounding, which is what makes the
+trade worth it at scale. (For reference, the O(n²) baseline itself is
+already only ~10% off best-known at moderate n — see the table above —
+so the gridded version's absolute quality is still reasonable, just not
+as tight.)
+
 ## Outputs
 
 Outputs land in `output/`:
@@ -215,6 +256,8 @@ Outputs land in `output/`:
   baseline.
 - `final_comparison_uniform.png` / `final_comparison_clustered.png` (+
   `.csv`) — every family's winning variant plotted against the others.
+- `scaling.png` — Shrink-Wrap's O(n²) baseline vs. the grid-bounded O(n)
+  variant, runtime (log-log) and quality cost vs. n up to 51,200 points.
 
 ## Running it
 
@@ -229,6 +272,10 @@ python demo.py --skip-animations --benchmark-ns 10 20 40 80 160 --benchmark-tria
 
 # test every improvement idea against its family, then compare the winners
 python families.py --outdir output
+
+# O(n^2) vs O(n) scaling test for Shrink-Wrap (takes a few minutes -- runs
+# the O(n^2) baseline up to n=6400)
+python scaling_test.py --outdir output
 
 # literal brute force instead of Held-Karp, for small n
 python -c "
@@ -261,4 +308,5 @@ tsp_lab/
   visualize.py    static comparison plot, animations, benchmark plots
 demo.py           CLI entry point for the original three-heuristic demo
 families.py       CLI entry point for the improvement-idea testing round
+scaling_test.py   CLI entry point for the O(n^2) vs O(n) scaling test
 ```

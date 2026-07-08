@@ -113,6 +113,108 @@ def shrink_wrap_cheapest_tour(points, return_trace=False):
 
 
 # ---------------------------------------------------------------------------
+# Shrink-Wrap, grid-bounded: O(n) instead of O(n^2)
+#
+# The O(n^2) cost of shrink_wrap_tour comes from two places: (1) each
+# insertion scans *every* edge currently in the path to find the shallowest
+# one, and (2) list.insert() on a growing Python list is itself O(path
+# length) because everything after the insertion point has to shift.
+#
+# This version fixes both. The path is a doubly-linked list (dict of
+# point -> prev/next), so splicing a point in is O(1) regardless of path
+# length. And instead of scanning the whole path, each new point only
+# checks the edges incident to a fixed number of nearby *already-placed*
+# points, found via a uniform spatial grid sized once up front for ~2
+# points per cell. Expanding the search ring outward from the point's own
+# cell until enough candidates are found is O(1) *on average* once the
+# path is a reasonable fraction of the grid's density; early on, with only
+# a handful of points placed against a grid sized for all n, a step can
+# need to look at more cells than that -- the trade documented in the
+# README benchmark.
+# ---------------------------------------------------------------------------
+
+def _build_grid(points, cell_capacity_hint=2.0):
+    n = len(points)
+    mins = points.min(axis=0)
+    maxs = points.max(axis=0)
+    span = np.maximum(maxs - mins, 1e-9)
+    n_cells = max(1, int(math.sqrt(n / cell_capacity_hint)))
+    cell_size = span / n_cells
+
+    def cell_of(pt):
+        idx = np.floor((pt - mins) / cell_size).astype(int)
+        return (int(np.clip(idx[0], 0, n_cells - 1)), int(np.clip(idx[1], 0, n_cells - 1)))
+
+    return cell_of, n_cells
+
+
+def shrink_wrap_gridded_tour(points, k_candidates=8, cell_capacity_hint=2.0,
+                             return_trace=False, return_stats=False):
+    n = len(points)
+    if n <= 3:
+        tour = list(range(n))
+        if return_stats:
+            return tour, {"steps": 0, "candidates_examined": []}
+        return tour
+
+    c = points.mean(axis=0)
+    dists = np.linalg.norm(points - c, axis=1)
+    order = np.argsort(-dists).tolist()
+
+    cell_of, n_cells = _build_grid(points, cell_capacity_hint)
+    grid = {}
+
+    def grid_add(i):
+        grid.setdefault(cell_of(points[i]), []).append(i)
+
+    # doubly-linked cycle over the first 3 (farthest) points
+    a, b, cc = order[:3]
+    nxt = {a: b, b: cc, cc: a}
+    prv = {b: a, cc: b, a: cc}
+    for i in (a, b, cc):
+        grid_add(i)
+
+    trace = [{"step": 0, "inserted": None, "edge": None, "path": [a, b, cc]}]
+    candidates_examined = []
+
+    for step, p in enumerate(order[3:], start=1):
+        px, py = cell_of(points[p])
+        k = min(k_candidates, step + 2)  # can't ask for more candidates than placed points
+        found, radius = [], 0
+        while len(found) < k and radius <= n_cells:
+            found = [i for dx in range(-radius, radius + 1) for dy in range(-radius, radius + 1)
+                     for i in grid.get((px + dx, py + dy), [])]
+            radius += 1
+        found = found[:k]
+        candidates_examined.append(len(found))
+
+        best_a, best_cost = None, math.inf
+        for q in found:
+            for u, v in ((q, nxt[q]), (prv[q], q)):
+                cost = _triangle_height(points, p, u, v)
+                if cost < best_cost:
+                    best_cost, best_a = cost, u
+
+        u, v = best_a, nxt[best_a]
+        nxt[u], prv[p] = p, u
+        nxt[p], prv[v] = v, p
+        grid_add(p)
+
+        trace.append({"step": step, "inserted": p, "edge": (u, v), "path": None})
+
+    tour, cur = [], a
+    for _ in range(n):
+        tour.append(cur)
+        cur = nxt[cur]
+
+    if return_stats:
+        return tour, {"steps": len(candidates_examined), "candidates_examined": candidates_examined}
+    if return_trace:
+        return tour, trace
+    return tour
+
+
+# ---------------------------------------------------------------------------
 # Approach 3: orbit & recenter
 #
 # A walker starts on the original bounding circle and orbits the centroid in

@@ -31,6 +31,7 @@ METHOD_COLORS = {
     "shrinkwrap_cheapest": "#8172cf",
     "shrinkwrap_2opt": "#2d2470",
     "shrinkwrap_cheapest_2opt": "#c3bbe8",
+    "shrinkwrap_gridded": "#008300",   # categorical slot 4 (green) -- unused elsewhere, avoids clashing with nn2opt's aqua
 
     "orbit_every3": "#f2905c",
     "orbit_every10": "#a52a2a",
@@ -53,6 +54,7 @@ METHOD_LABELS = {
     "shrinkwrap_cheapest": "Shrink-Wrap (cheapest-insertion)",
     "shrinkwrap_2opt": "Shrink-Wrap + 2-opt",
     "shrinkwrap_cheapest_2opt": "Shrink-Wrap (cheapest) + 2-opt",
+    "shrinkwrap_gridded": "Shrink-Wrap (grid-bounded, O(n))",
 
     "orbit_every3": "Orbit, recenter every 3",
     "orbit_every10": "Orbit, recenter every 10",
@@ -315,6 +317,59 @@ def plot_cluster_structure(points, save_path, threshold=None, title=None):
 
     ax.set_title(title or f"{len(clusters)} clusters found (MST-gap threshold)",
                 fontsize=10.5, color=INK, loc="left")
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=160, bbox_inches="tight", facecolor=SURFACE)
+    plt.close(fig)
+    return save_path
+
+
+# ---------------------------------------------------------------------------
+# Shrink-Wrap O(n^2) vs O(n) scaling
+# ---------------------------------------------------------------------------
+
+def plot_scaling(measured, gridded_extra, save_path, quadratic_fit_from=None):
+    """measured: list of dicts with n, time_baseline, time_gridded, ratio_to_baseline
+    (both methods actually run). gridded_extra: list of dicts with n, time_gridded
+    only, for sizes where the O(n^2) baseline wasn't run. quadratic_fit_from: an
+    (n, time) point to anchor a dashed O(n^2) extrapolation curve through the
+    gridded_extra range, showing how long the baseline *would* take."""
+    ns_m = [r["n"] for r in measured]
+    t_base = [r["time_baseline"] for r in measured]
+    t_grid = [r["time_gridded"] for r in measured]
+    ratio = [r["ratio_to_baseline"] for r in measured]
+
+    ns_all_grid = ns_m + [r["n"] for r in gridded_extra]
+    t_all_grid = t_grid + [r["time_gridded"] for r in gridded_extra]
+
+    fig, (ax_t, ax_q) = plt.subplots(1, 2, figsize=(11, 4.6), facecolor=SURFACE)
+    for ax in (ax_t, ax_q):
+        _style_ax(ax, equal=False)
+        ax.grid(True, color=GRID, linewidth=0.8, zorder=0)
+
+    ax_t.plot(ns_m, t_base, "-o", color=METHOD_COLORS["shrinkwrap"],
+             label=METHOD_LABELS["shrinkwrap"] + "  ·  O(n²)", markersize=4, linewidth=2, zorder=3)
+    if quadratic_fit_from:
+        n0, t0 = quadratic_fit_from
+        ns_fit = [n for n in ns_all_grid if n >= n0]
+        t_fit = [t0 * (n / n0) ** 2 for n in ns_fit]
+        ax_t.plot(ns_fit, t_fit, "--", color=METHOD_COLORS["shrinkwrap"], alpha=0.45,
+                 linewidth=1.6, zorder=2, label="O(n²) extrapolated")
+    ax_t.plot(ns_all_grid, t_all_grid, "-o", color=METHOD_COLORS["shrinkwrap_gridded"],
+             label=METHOD_LABELS["shrinkwrap_gridded"] + "  ·  O(n)", markersize=4, linewidth=2, zorder=3)
+    ax_t.set_xscale("log")
+    ax_t.set_yscale("log")
+    ax_t.set_xlabel("points (n), log scale", color=INK_SECONDARY, fontsize=9)
+    ax_t.set_ylabel("wall-clock time (s), log scale", color=INK_SECONDARY, fontsize=9)
+    ax_t.set_title("Runtime: O(n²) vs O(n)", fontsize=10.5, color=INK, loc="left")
+    ax_t.legend(fontsize=8.5, frameon=False, loc="upper left")
+
+    ax_q.plot(ns_m, ratio, "-o", color=METHOD_COLORS["shrinkwrap_gridded"], markersize=4, linewidth=2, zorder=3)
+    ax_q.axhline(1.0, color=INK_MUTED, linewidth=1, linestyle="--", zorder=1)
+    ax_q.set_xscale("log")
+    ax_q.set_xlabel("points (n), log scale", color=INK_SECONDARY, fontsize=9)
+    ax_q.set_ylabel("gridded length ÷ O(n²) baseline length", color=INK_SECONDARY, fontsize=9)
+    ax_q.set_title("Quality cost of capping the search", fontsize=10.5, color=INK, loc="left")
+
     fig.tight_layout()
     fig.savefig(save_path, dpi=160, bbox_inches="tight", facecolor=SURFACE)
     plt.close(fig)
