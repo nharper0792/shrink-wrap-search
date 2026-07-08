@@ -23,6 +23,22 @@ METHOD_COLORS = {
     "shrinkwrap": "#4a3aa7",    # categorical slot 5 (violet)
     "orbit": "#e34948",         # categorical slot 6 (red)
     "orbit_clustered": "#e87ba4",  # categorical slot 7 (magenta)
+
+    # family variants -- shades of the parent method's hue, so a family
+    # chart reads as "one hue = one family, lightness = which variant"
+    "angular_oropt": "#b97600",
+
+    "shrinkwrap_cheapest": "#8172cf",
+    "shrinkwrap_2opt": "#2d2470",
+    "shrinkwrap_cheapest_2opt": "#c3bbe8",
+
+    "orbit_every3": "#f2905c",
+    "orbit_every10": "#a52a2a",
+    "orbit_noncross": "#7a1f1f",
+    "orbit_2opt": "#7d0f0f",
+
+    "orbit_clustered_v2": "#c14c7c",
+    "shrinkwrap_clustered": "#7a1f47",
 }
 METHOD_LABELS = {
     "exact": "Exact (Held–Karp)",
@@ -31,6 +47,20 @@ METHOD_LABELS = {
     "shrinkwrap": "Shrink-Wrap (vacuum bag)",
     "orbit": "Orbit & Recenter",
     "orbit_clustered": "Orbit & Recenter + clustering",
+
+    "angular_oropt": "Angular Sort + Or-opt",
+
+    "shrinkwrap_cheapest": "Shrink-Wrap (cheapest-insertion)",
+    "shrinkwrap_2opt": "Shrink-Wrap + 2-opt",
+    "shrinkwrap_cheapest_2opt": "Shrink-Wrap (cheapest) + 2-opt",
+
+    "orbit_every3": "Orbit, recenter every 3",
+    "orbit_every10": "Orbit, recenter every 10",
+    "orbit_noncross": "Orbit + crossing-avoidance",
+    "orbit_2opt": "Orbit + 2-opt",
+
+    "orbit_clustered_v2": "Orbit + clustering (endpoint-opt)",
+    "shrinkwrap_clustered": "Shrink-Wrap + clustering (endpoint-opt)",
 }
 
 def _style_ax(ax, equal=True):

@@ -22,7 +22,8 @@ METHODS = {
 EXACT_MAX_N = 13  # Held-Karp is O(2^n n^2); keep the benchmark fast
 
 
-def run_benchmark(ns=(6, 8, 10, 12, 15, 20, 30, 50, 75), trials=5, seed=0, point_generator=None):
+def run_benchmark(ns=(6, 8, 10, 12, 15, 20, 30, 50, 75), trials=5, seed=0, point_generator=None,
+                  methods=None):
     """Run every method on `trials` random instances per n. When n is small
     enough, the Held-Karp exact solution is used as the quality reference
     ('best'); otherwise the best tour found by any method on that instance
@@ -30,8 +31,13 @@ def run_benchmark(ns=(6, 8, 10, 12, 15, 20, 30, 50, 75), trials=5, seed=0, point
 
     `point_generator(n, seed=...)` defaults to `random_points` (uniform);
     pass `clustered_points` to see how the methods -- especially
-    orbit_clustered -- do on data with genuine cluster structure."""
+    orbit_clustered -- do on data with genuine cluster structure.
+
+    `methods` defaults to the module-level METHODS dict; pass a custom
+    {name: fn} dict to benchmark a different set (e.g. one heuristic
+    family's variants)."""
     point_generator = point_generator or random_points
+    methods = METHODS if methods is None else methods
     records = []
     rng_seed = seed
     for n in ns:
@@ -40,7 +46,7 @@ def run_benchmark(ns=(6, 8, 10, 12, 15, 20, 30, 50, 75), trials=5, seed=0, point
             pts = point_generator(n, seed=rng_seed)
             lengths = {}
 
-            for name, fn in METHODS.items():
+            for name, fn in methods.items():
                 t0 = time.perf_counter()
                 tour = fn(pts)
                 dt = time.perf_counter() - t0

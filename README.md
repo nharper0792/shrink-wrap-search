@@ -140,6 +140,58 @@ recentering — each cluster gets solved as its own small, contained problem,
 and only the macro-order between cluster centroids has to deal with the
 long-range structure.
 
+## Round 2: testing improvement ideas per family
+
+Each heuristic got 2-4 targeted improvement ideas, implemented in
+`tsp_lab/heuristics.py` and tested against its own family's baseline via
+`families.py` (which also produces a final comparison of each family's
+winner against the others). Full results in `output/family_*.png` and
+`output/final_comparison_*.png`; the short version:
+
+- **Shrink-Wrap**: `shrink_wrap_cheapest_tour` (textbook cheapest-insertion
+  metric instead of geometric shallowness) is a modest win. The much bigger
+  win is a plain 2-opt cleanup pass — `shrink_wrap_2opt_tour` lands at
+  1.00-1.04× best-known at every size tested, essentially solving the
+  problem outright.
+- **Angular Sort**: `angular_sort_oropt_tour` (an Or-opt pass — relocate
+  one out-of-place point at a time, targeting exactly the radial zigzag
+  visible in the animation) is dramatic: from 1.63× best-known at n=75 down
+  to ~1.04×.
+- **Orbit & Recenter**: recentering less often (every 3 or 10 points
+  instead of every point) gave mixed, inconsistent results — not a
+  reliable fix. The crossing-avoidance idea, tested as literally specified
+  (reject a candidate if its edge crosses an already-placed edge), turned
+  out to be a **provable no-op**: it produced byte-identical tours to the
+  baseline across every test instance. The reason is structural — every
+  self-crossing found (209 of them, across 234 sampled instances) involved
+  the *closing* edge (last point back to the first), which only forms
+  after the walk ends and is invisible to any per-step check. A plain
+  2-opt cleanup pass (`orbit_recenter_2opt_tour`) *does* see that edge and
+  fixes it completely (verified: 0 crossings across the same sample,
+  down from 51), taking Orbit & Recenter from the worst heuristic
+  (1.71× best-known at n=75) to competitive (1.03-1.05×).
+- **Clustering**: adding endpoint optimization (rotate each cluster's
+  sub-tour to face its macro-neighbors before splicing it in) gave a small
+  further improvement. The bigger lever was *which* heuristic gets
+  clustered — wrapping the already-strong Shrink-Wrap (cheapest-insertion
+  + 2-opt) instead of the weak Orbit & Recenter
+  (`shrink_wrap_clustered_tour`) reaches 1.00-1.05× best-known on both
+  uniform and genuinely clustered data.
+
+The pattern across all four families is the same: **every geometric
+construction idea benefits enormously from being paired with a cheap local
+-search cleanup pass** (2-opt or Or-opt). The constructive heuristics differ
+a lot in how good a *starting point* they hand to local search, but once
+local search runs, most of that gap closes. `final_comparison_uniform.png`
+/ `final_comparison_clustered.png` put every family's winner on the same
+axes: with a cleanup pass attached, all three families land in roughly the
+same 1.00-1.05× best-known neighborhood, and Angular Sort — the "worst"
+original idea — improves the most in relative terms (65% too long →
+essentially optimal) because it started from the simplest, most
+easily-corrected construction.
+
+## Outputs
+
 Outputs land in `output/`:
 
 - `comparison.png` — all methods on the same point set, tour drawn, length
@@ -157,6 +209,12 @@ Outputs land in `output/`:
 - `benchmark_clustered.png` / `benchmark_clustered.csv` — the same sweep on
   genuinely clustered instances, to see where the clustering wrapper
   actually earns its keep.
+- `family_shrinkwrap.png`, `family_angular.png`, `family_orbit.png`,
+  `family_clustering.png` / `family_clustering_clustered.png` (+ matching
+  `.csv`) — each family's improvement ideas benchmarked against its own
+  baseline.
+- `final_comparison_uniform.png` / `final_comparison_clustered.png` (+
+  `.csv`) — every family's winning variant plotted against the others.
 
 ## Running it
 
@@ -168,6 +226,9 @@ python demo.py --n 12 --seed 1
 
 # just the benchmarks, larger sweep
 python demo.py --skip-animations --benchmark-ns 10 20 40 80 160 --benchmark-trials 8
+
+# test every improvement idea against its family, then compare the winners
+python families.py --outdir output
 
 # literal brute force instead of Held-Karp, for small n
 python -c "
@@ -193,9 +254,11 @@ print(tour_length(pts, tour))
 ```
 tsp_lab/
   geometry.py     point generation, tour length, centroid
-  heuristics.py   all three heuristics + the clustering wrapper +
-                  brute force / Held-Karp / NN+2-opt baselines
-  benchmark.py    run all methods across n and seeds, save CSV
+  heuristics.py   all three heuristics + their improvement variants +
+                  the clustering wrapper + brute force / Held-Karp /
+                  NN+2-opt / 2-opt / Or-opt baselines and local search
+  benchmark.py    run a set of methods across n and seeds, save CSV
   visualize.py    static comparison plot, animations, benchmark plots
-demo.py           CLI entry point that runs everything above
+demo.py           CLI entry point for the original three-heuristic demo
+families.py       CLI entry point for the improvement-idea testing round
 ```

@@ -45,6 +45,7 @@ def bounding_circle(points):
 # ---------------------------------------------------------------------------
 
 def _triangle_height(points, p, a, b):
+    """Shallowness metric: perpendicular distance from p to segment (a, b)."""
     ax, ay = points[a]
     bx, by = points[b]
     px, py = points[p]
@@ -58,7 +59,16 @@ def _triangle_height(points, p, a, b):
     return math.hypot(px - projx, py - projy)
 
 
-def shrink_wrap_tour(points, return_trace=False):
+def _cheapest_insertion_cost(points, p, a, b):
+    """Textbook insertion metric: extra tour length added by splicing p into (a, b)."""
+    ax, ay = points[a]
+    bx, by = points[b]
+    px, py = points[p]
+    return (math.hypot(px - ax, py - ay) + math.hypot(bx - px, by - py)
+            - math.hypot(bx - ax, by - ay))
+
+
+def _shrink_wrap_generic(points, cost_fn, return_trace=False):
     n = len(points)
     if n <= 3:
         tour = list(range(n))
@@ -76,12 +86,12 @@ def shrink_wrap_tour(points, return_trace=False):
 
     for step, p in enumerate(order[3:], start=1):
         m = len(path)
-        best_i, best_h = 0, math.inf
+        best_i, best_cost = 0, math.inf
         for i in range(m):
             a, b = path[i], path[(i + 1) % m]
-            h = _triangle_height(points, p, a, b)
-            if h < best_h:
-                best_h, best_i = h, i
+            cost = cost_fn(points, p, a, b)
+            if cost < best_cost:
+                best_cost, best_i = cost, i
         a, b = path[best_i], path[(best_i + 1) % m]
         path.insert(best_i + 1, p)
         trace.append({"step": step, "inserted": p, "edge": (a, b), "path": list(path)})
@@ -89,6 +99,17 @@ def shrink_wrap_tour(points, return_trace=False):
     if return_trace:
         return path, trace
     return path
+
+
+def shrink_wrap_tour(points, return_trace=False):
+    return _shrink_wrap_generic(points, _triangle_height, return_trace)
+
+
+def shrink_wrap_cheapest_tour(points, return_trace=False):
+    """Same recursive-insertion structure, but the textbook cheapest-insertion
+    cost (added tour length) instead of geometric shallowness decides where
+    each point splices in."""
+    return _shrink_wrap_generic(points, _cheapest_insertion_cost, return_trace)
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +144,63 @@ def shrink_wrap_tour(points, return_trace=False):
 # clockwise, matching angular_sort_tour's default).
 # ---------------------------------------------------------------------------
 
-def orbit_recenter_tour(points, direction=-1, start_angle=0.0, return_trace=False):
+def _select_min_offset(idx_list, offsets, points, cur_pos, tour):
+    return idx_list[int(np.argmin(offsets))]
+
+
+def _orientation(a, b, c):
+    val = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    if abs(val) < 1e-12:
+        return 0
+    return 1 if val > 0 else 2
+
+
+def _on_segment(a, b, c):
+    return (min(a[0], b[0]) - 1e-9 <= c[0] <= max(a[0], b[0]) + 1e-9 and
+            min(a[1], b[1]) - 1e-9 <= c[1] <= max(a[1], b[1]) + 1e-9)
+
+
+def _segments_intersect(p1, p2, p3, p4):
+    o1, o2 = _orientation(p1, p2, p3), _orientation(p1, p2, p4)
+    o3, o4 = _orientation(p3, p4, p1), _orientation(p3, p4, p2)
+    if o1 != o2 and o3 != o4:
+        return True
+    if o1 == 0 and _on_segment(p1, p2, p3):
+        return True
+    if o2 == 0 and _on_segment(p1, p2, p4):
+        return True
+    if o3 == 0 and _on_segment(p3, p4, p1):
+        return True
+    if o4 == 0 and _on_segment(p3, p4, p2):
+        return True
+    return False
+
+
+def _select_min_offset_noncross(idx_list, offsets, points, cur_pos, tour):
+    """Among candidates, prefer the smallest forward offset whose connecting
+    edge doesn't cross an already-placed tour edge; falls back to the
+    smallest offset overall if every candidate would cross something."""
+    order = np.argsort(offsets)
+    # drop the most recent edge: it may share cur_pos as an endpoint, which
+    # the intersection test would otherwise flag as a false-positive "cross"
+    edges = list(zip(tour[:-1], tour[1:]))[:-1] if len(tour) >= 2 else []
+    for oi in order:
+        cand = idx_list[oi]
+        p_cand = points[cand]
+        if not any(_segments_intersect(cur_pos, p_cand, points[a], points[b]) for a, b in edges):
+            return cand
+    return idx_list[int(order[0])]
+
+
+def orbit_recenter_tour(points, direction=-1, start_angle=0.0, recenter_every=1,
+                        select_fn=None, return_trace=False):
+    """recenter_every=1 recalculates the circle after every point (the
+    original design); larger values orbit the same circle for several picks
+    before recentering. select_fn(idx_list, offsets, points, cur_pos, tour)
+    picks which candidate to select among the "kept" (forward-half) ones --
+    defaults to smallest offset; pass _select_min_offset_noncross to add a
+    self-intersection check."""
+    select_fn = select_fn or _select_min_offset
     n = len(points)
     if n <= 2:
         tour = list(range(n))
@@ -144,8 +221,9 @@ def orbit_recenter_tour(points, direction=-1, start_angle=0.0, return_trace=Fals
         return (theta - phi) % (2 * math.pi) if direction < 0 else (phi - theta) % (2 * math.pi)
 
     first_leg = True
+    since_recenter = 0
     while remaining:
-        if not first_leg:
+        if not first_leg and since_recenter >= recenter_every:
             rem_idx = list(remaining)
             rem_pts = points[rem_idx]
             new_center = rem_pts.mean(axis=0)
@@ -156,6 +234,7 @@ def orbit_recenter_tour(points, direction=-1, start_angle=0.0, return_trace=Fals
             cur_center, cur_radius, cur_theta = new_center, new_R, theta_snap
             trace.append({"type": "recalc", "center": cur_center.copy(), "radius": cur_radius,
                           "cur_pos": cur_pos.copy(), "path": list(tour)})
+            since_recenter = 0
 
         idx_list = list(remaining)
         if len(idx_list) == 1:
@@ -168,7 +247,8 @@ def orbit_recenter_tour(points, direction=-1, start_angle=0.0, return_trace=Fals
             if not kept_mask.any():  # defensive only -- see proof above, shouldn't trigger
                 kept_mask = np.ones_like(kept_mask, dtype=bool)
             kept_idx = np.array(idx_list)[kept_mask]
-            best = int(kept_idx[np.argmin(offsets[kept_mask])])
+            kept_offsets = offsets[kept_mask]
+            best = select_fn(kept_idx.tolist(), kept_offsets, points, cur_pos, tour)
             disqualified = [i for i, m in zip(idx_list, kept_mask) if not m]
 
         tour.append(best)
@@ -179,10 +259,29 @@ def orbit_recenter_tour(points, direction=-1, start_angle=0.0, return_trace=Fals
                       "selected": best, "disqualified": disqualified,
                       "cur_pos": cur_pos.copy(), "path": list(tour)})
         first_leg = False
+        since_recenter += 1
 
     if return_trace:
         return tour, trace
     return tour
+
+
+def orbit_recenter_noncross_tour(points, **kwargs):
+    """Per-step crossing avoidance. Empirically this makes ~no difference:
+    the open path built leg-by-leg essentially never crosses itself under
+    this selection rule: all of the self-crossings observed turn out to be
+    the *closing* edge (last point back to the first), which forms only
+    after the loop ends and is invisible to any per-step check. Kept as a
+    correctly-implemented negative result; see orbit_recenter_2opt_tour for
+    the fix informed by that finding."""
+    return orbit_recenter_tour(points, select_fn=_select_min_offset_noncross, **kwargs)
+
+
+def orbit_recenter_2opt_tour(points):
+    """A cleanup pass sees the closing edge (2-opt checks all edge pairs,
+    wraparound included), so unlike orbit_recenter_noncross_tour this
+    actually eliminates the self-crossings."""
+    return two_opt(points, orbit_recenter_tour(points))
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +322,55 @@ def two_opt(points, tour, max_passes=200):
                     a, b = best[i], best[i + 1]
                     improved = True
     return best
+
+
+def or_opt(points, tour, max_passes=100):
+    """Local search: repeatedly relocate a single point to wherever it's
+    cheapest to reinsert, if that's cheaper than leaving it where it is.
+    Targets a different failure mode than 2-opt: a single point visited
+    "out of order" (e.g. Angular Sort's radial zigzags) rather than a
+    crossing pair of edges."""
+    n = len(tour)
+    best = list(tour)
+    dmat = np.linalg.norm(points[:, None, :] - points[None, :, :], axis=-1)
+    improved = True
+    while improved and max_passes > 0 and n >= 4:
+        improved = False
+        max_passes -= 1
+        for i in range(n):
+            p = best[i]
+            prev_p, next_p = best[i - 1], best[(i + 1) % n]
+            removal_gain = dmat[prev_p, p] + dmat[p, next_p] - dmat[prev_p, next_p]
+
+            best_j, best_delta = None, -1e-9
+            for j in range(n):
+                if j == i or (j + 1) % n == i:
+                    continue
+                a, b = best[j], best[(j + 1) % n]
+                insertion_cost = dmat[a, p] + dmat[p, b] - dmat[a, b]
+                delta = removal_gain - insertion_cost
+                if delta > best_delta:
+                    best_delta, best_j = delta, j
+
+            if best_j is not None:
+                new_tour = best[:i] + best[i + 1:]
+                insert_at = best_j if best_j < i else best_j - 1
+                new_tour.insert(insert_at + 1, p)
+                best = new_tour
+                improved = True
+    return best
+
+
+def angular_sort_oropt_tour(points, clockwise=True):
+    return or_opt(points, angular_sort_tour(points, clockwise=clockwise))
+
+
+def shrink_wrap_2opt_tour(points):
+    return two_opt(points, shrink_wrap_tour(points))
+
+
+def shrink_wrap_cheapest_2opt_tour(points):
+    return two_opt(points, shrink_wrap_cheapest_tour(points))
 
 
 def nearest_neighbor_2opt_tour(points, start=0):
@@ -370,7 +518,31 @@ def cluster_by_threshold(points, threshold=None):
     return clusters
 
 
-def clustered_tour(points, base_tour_fn, threshold=None, min_cluster_size=4, max_depth=6, _depth=0):
+def _best_rotation(sub_tour, sub_points, anchor, next_anchor):
+    """Pick the rotation + direction of a cyclic sub-tour that best faces its
+    macro-neighbors: minimizes dist(anchor, entry point) + dist(exit point,
+    next_anchor). Total internal length of a cycle is direction-invariant,
+    so this doesn't change the sub-tour's own quality -- only which point it
+    presents at each end to the rest of the tour."""
+    m = len(sub_tour)
+    if m <= 1 or (anchor is None and next_anchor is None):
+        return sub_tour
+    best_seq, best_cost = sub_tour, math.inf
+    for start in range(m):
+        for direction in (1, -1):
+            seq = [sub_tour[(start + direction * k) % m] for k in range(m)]
+            cost = 0.0
+            if anchor is not None:
+                cost += float(np.linalg.norm(sub_points[seq[0]] - anchor))
+            if next_anchor is not None:
+                cost += float(np.linalg.norm(sub_points[seq[-1]] - next_anchor))
+            if cost < best_cost:
+                best_cost, best_seq = cost, seq
+    return best_seq
+
+
+def clustered_tour(points, base_tour_fn, threshold=None, min_cluster_size=4, max_depth=6,
+                   optimize_endpoints=False, _depth=0):
     n = len(points)
     if n <= min_cluster_size or _depth >= max_depth:
         return base_tour_fn(points)
@@ -381,18 +553,38 @@ def clustered_tour(points, base_tour_fn, threshold=None, min_cluster_size=4, max
 
     centroids = np.array([points[c].mean(axis=0) for c in clusters])
     macro_order = base_tour_fn(centroids)
+    m = len(macro_order)
 
     tour = []
-    for ci in macro_order:
+    for pos, ci in enumerate(macro_order):
         idx = clusters[ci]
         if len(idx) == 1:
             tour.append(int(idx[0]))
-        else:
-            sub_tour = clustered_tour(points[idx], base_tour_fn, threshold, min_cluster_size,
-                                      max_depth, _depth + 1)
-            tour.extend(int(idx[i]) for i in sub_tour)
+            continue
+
+        sub_tour = clustered_tour(points[idx], base_tour_fn, threshold, min_cluster_size,
+                                  max_depth, optimize_endpoints, _depth + 1)
+        if optimize_endpoints:
+            anchor = points[tour[-1]] if tour else None
+            next_ci = macro_order[(pos + 1) % m]
+            next_anchor = centroids[next_ci] if pos + 1 < m else None
+            sub_tour = _best_rotation(sub_tour, points[idx], anchor, next_anchor)
+
+        tour.extend(int(idx[i]) for i in sub_tour)
     return tour
 
 
 def orbit_recenter_clustered_tour(points, **kwargs):
     return clustered_tour(points, orbit_recenter_tour, **kwargs)
+
+
+def orbit_recenter_clustered_v2_tour(points, **kwargs):
+    """Clustered orbit-and-recenter with endpoint optimization."""
+    return clustered_tour(points, orbit_recenter_tour, optimize_endpoints=True, **kwargs)
+
+
+def shrink_wrap_clustered_tour(points, **kwargs):
+    """Recursive clustering wrapped around the best shrink-wrap variant, with
+    endpoint optimization -- tests whether clustering helps an already-good
+    heuristic, not just a struggling one."""
+    return clustered_tour(points, shrink_wrap_cheapest_2opt_tour, optimize_endpoints=True, **kwargs)
