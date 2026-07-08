@@ -21,12 +21,14 @@ METHOD_COLORS = {
     "nn2opt": "#1baf7a",      # categorical slot 2 (aqua)
     "angular": "#eda100",     # categorical slot 3 (yellow)
     "shrinkwrap": "#4a3aa7",  # categorical slot 5 (violet)
+    "orbit": "#e34948",       # categorical slot 6 (red)
 }
 METHOD_LABELS = {
     "exact": "Exact (Held–Karp)",
     "nn2opt": "Nearest-Neighbor + 2-opt",
     "angular": "Angular Sort (wedge)",
     "shrinkwrap": "Shrink-Wrap (vacuum bag)",
+    "orbit": "Orbit & Recenter",
 }
 
 def _style_ax(ax, equal=True):
@@ -201,10 +203,69 @@ def animate_shrink_wrap(points, tour, trace, save_path, fps=1.5, hold_frames=1):
 
 
 # ---------------------------------------------------------------------------
+# Approach 3 animation: circle orbits and picks off the next point in its
+# forward half; after every pick the circle recenters on whatever's left.
+# ---------------------------------------------------------------------------
+
+def animate_orbit_recenter(points, tour, trace, save_path, fps=2):
+    n = len(points)
+    c0, r0 = bounding_circle(points)
+    pad = r0 * 0.25
+
+    fig, ax = plt.subplots(figsize=(6, 6), facecolor=SURFACE)
+    _style_ax(ax)
+    ax.set_xlim(c0[0] - r0 - pad, c0[0] + r0 + pad)
+    ax.set_ylim(c0[1] - r0 - pad, c0[1] + r0 + pad)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title("Orbit & Recenter: circle picks off the next forward point, then\nrecenters on what's left",
+                 fontsize=10.5, color=INK)
+
+    circle = patches.Circle(c0, r0, fill=False, linestyle="--", linewidth=1.3,
+                            edgecolor=INK_MUTED, zorder=1)
+    ax.add_patch(circle)
+    center_mark = ax.scatter(*c0, marker="+", s=60, color=INK_SECONDARY, zorder=2)
+
+    scat = ax.scatter(points[:, 0], points[:, 1], s=26, color=INK_MUTED, zorder=4,
+                       edgecolors=SURFACE, linewidths=0.8)
+    (path_line,) = ax.plot([], [], color=METHOD_COLORS["orbit"], linewidth=2.2, zorder=5)
+    (walker,) = ax.plot([], [], marker="o", markersize=7, color=METHOD_COLORS["orbit"],
+                        markerfacecolor="none", markeredgewidth=2, zorder=6)
+
+    def update(frame):
+        entry = trace[frame]
+        circle.set_center(entry["center"])
+        circle.set_radius(entry["radius"])
+        center_mark.set_offsets([entry["center"]])
+        walker.set_data([entry["cur_pos"][0]], [entry["cur_pos"][1]])
+
+        path = entry["path"]
+        if path:
+            pts = points[path]
+            path_line.set_data(pts[:, 0], pts[:, 1])
+        else:
+            path_line.set_data([], [])
+        if entry is trace[-1] and len(path) == n:
+            closed = points[path + [path[0]]]
+            path_line.set_data(closed[:, 0], closed[:, 1])
+
+        placed = set(path)
+        colors = [METHOD_COLORS["orbit"] if i in placed else INK_MUTED for i in range(n)]
+        scat.set_color(colors)
+
+        return circle, center_mark, scat, path_line, walker
+
+    anim = FuncAnimation(fig, update, frames=len(trace), interval=1000 / fps, blit=True)
+    anim.save(save_path, writer=PillowWriter(fps=fps))
+    plt.close(fig)
+    return save_path
+
+
+# ---------------------------------------------------------------------------
 # Benchmark plots
 # ---------------------------------------------------------------------------
 
-def plot_benchmark(records, save_path, methods=("exact", "nn2opt", "angular", "shrinkwrap")):
+def plot_benchmark(records, save_path, methods=("exact", "nn2opt", "angular", "shrinkwrap", "orbit")):
     ns = sorted(set(r["n"] for r in records))
     fig, (ax_q, ax_t) = plt.subplots(1, 2, figsize=(11, 4.6), facecolor=SURFACE)
     for ax in (ax_q, ax_t):

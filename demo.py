@@ -9,10 +9,12 @@ from tsp_lab.heuristics import (
     angular_sort_tour,
     exact_tour,
     nearest_neighbor_2opt_tour,
+    orbit_recenter_tour,
     shrink_wrap_tour,
 )
 from tsp_lab.visualize import (
     animate_angular_sweep,
+    animate_orbit_recenter,
     animate_shrink_wrap,
     plot_benchmark,
     plot_static_comparison,
@@ -34,15 +36,18 @@ def run_static_comparison(points, outdir, exact_max_n=13):
     tour, dt = timed(shrink_wrap_tour, points)
     results["shrinkwrap"] = {"tour": tour, "length": tour_length(points, tour), "time": dt}
 
+    tour, dt = timed(orbit_recenter_tour, points)
+    results["orbit"] = {"tour": tour, "length": tour_length(points, tour), "time": dt}
+
     tour, dt = timed(nearest_neighbor_2opt_tour, points)
     results["nn2opt"] = {"tour": tour, "length": tour_length(points, tour), "time": dt}
 
     if len(points) <= exact_max_n:
         tour, dt = timed(exact_tour, points)
         results["exact"] = {"tour": tour, "length": tour_length(points, tour), "time": dt}
-        ordered = {k: results[k] for k in ["exact", "nn2opt", "angular", "shrinkwrap"]}
+        ordered = {k: results[k] for k in ["exact", "nn2opt", "angular", "shrinkwrap", "orbit"]}
     else:
-        ordered = {k: results[k] for k in ["nn2opt", "angular", "shrinkwrap"]}
+        ordered = {k: results[k] for k in ["nn2opt", "angular", "shrinkwrap", "orbit"]}
 
     path = os.path.join(outdir, "comparison.png")
     plot_static_comparison(
@@ -77,7 +82,7 @@ def main():
     else:
         points = clustered_points(args.n, seed=args.seed)
 
-    print(f"[1/4] Static comparison (n={args.n}, {args.distribution})...")
+    print(f"[1/5] Static comparison (n={args.n}, {args.distribution})...")
     path, ordered = run_static_comparison(points, args.outdir)
     print(f"  saved {path}")
     for k, r in ordered.items():
@@ -87,27 +92,33 @@ def main():
         anim_points = (random_points(args.anim_n, seed=args.anim_seed) if args.distribution == "uniform"
                        else clustered_points(args.anim_n, seed=args.anim_seed))
 
-        print("[2/4] Angular-sort sweep animation...")
+        print("[2/5] Angular-sort sweep animation...")
         p1 = animate_angular_sweep(anim_points, os.path.join(args.outdir, "angular_sweep.gif"))
         print(f"  saved {p1}")
 
-        print("[3/4] Shrink-wrap peeling animation...")
+        print("[3/5] Shrink-wrap peeling animation...")
         tour, trace = shrink_wrap_tour(anim_points, return_trace=True)
         p2 = animate_shrink_wrap(anim_points, tour, trace, os.path.join(args.outdir, "shrink_wrap.gif"))
         print(f"  saved {p2}")
+
+        print("[4/5] Orbit & recenter animation...")
+        tour, trace = orbit_recenter_tour(anim_points, return_trace=True)
+        p3 = animate_orbit_recenter(anim_points, tour, trace, os.path.join(args.outdir, "orbit_recenter.gif"))
+        print(f"  saved {p3}")
     else:
-        print("[2/4] Skipping animations")
-        print("[3/4] Skipping animations")
+        print("[2/5] Skipping animations")
+        print("[3/5] Skipping animations")
+        print("[4/5] Skipping animations")
 
     if not args.skip_benchmark:
-        print(f"[4/4] Benchmark across n={args.benchmark_ns} ({args.benchmark_trials} trials each)...")
+        print(f"[5/5] Benchmark across n={args.benchmark_ns} ({args.benchmark_trials} trials each)...")
         records = run_benchmark(ns=args.benchmark_ns, trials=args.benchmark_trials, seed=args.seed)
         csv_path = save_csv(records, os.path.join(args.outdir, "benchmark.csv"))
         plot_path = plot_benchmark(records, os.path.join(args.outdir, "benchmark.png"))
         print(f"  saved {csv_path}")
         print(f"  saved {plot_path}")
     else:
-        print("[4/4] Skipping benchmark")
+        print("[5/5] Skipping benchmark")
 
 
 if __name__ == "__main__":

@@ -6,12 +6,14 @@ from .heuristics import (
     angular_sort_tour,
     exact_tour,
     nearest_neighbor_2opt_tour,
+    orbit_recenter_tour,
     shrink_wrap_tour,
 )
 
 METHODS = {
     "angular": angular_sort_tour,
     "shrinkwrap": shrink_wrap_tour,
+    "orbit": orbit_recenter_tour,
     "nn2opt": nearest_neighbor_2opt_tour,
 }
 
