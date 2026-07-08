@@ -92,6 +92,119 @@ def shrink_wrap_tour(points, return_trace=False):
 
 
 # ---------------------------------------------------------------------------
+# Approach 3: orbit & recenter
+#
+# A walker starts on the original bounding circle and orbits the centroid in
+# a fixed rotational direction. For the still-unvisited points, one sweep
+# ("leg") works like this: on the first tiny step, any point whose distance
+# to the walker just *increased* is disqualified for this leg (it's more
+# than a half-turn "behind" the walker's heading). Among the survivors, the
+# walker keeps going until one point's distance stops decreasing -- i.e. the
+# walker has just passed its closest approach -- and that point is selected.
+# The walker jumps to it and a new leg starts from there, on the *same*
+# circle.
+#
+# If a leg disqualifies every remaining point (nothing is "ahead"), the
+# circle is recalculated from just the remaining points (new centroid, new
+# radius), and the walker marches from its current spot onto that new circle
+# -- preserving its angular bearing around the new center -- before resuming
+# orbiting in the same rotational direction.
+#
+# Assumptions not pinned down by the description, called out explicitly:
+# the walker's start position (start_angle, default 0 rad on the original
+# circle) and the exact "march to the new circle" mechanic (here: move
+# radially from the current position until reaching the new circle,
+# preserving the angle around the new center -- i.e. only the radius
+# changes, not the bearing).
+#
+# If a run gets stuck (recalculating without ever finding a next point --
+# capped at max_recalcs) some points may never get picked up by the walker.
+# Those are inserted afterward next to whichever already-placed point has
+# the closest angle to them, both measured from the *original* center and
+# the *original* start angle.
+# ---------------------------------------------------------------------------
+
+def _circular_distance(a, b):
+    d = abs(a - b) % (2 * math.pi)
+    return min(d, 2 * math.pi - d)
+
+
+def orbit_recenter_tour(points, direction=-1, start_angle=0.0, max_recalcs=None, return_trace=False):
+    n = len(points)
+    if n <= 2:
+        tour = list(range(n))
+        trace = [{"type": "trivial", "path": list(tour)}]
+        return (tour, trace) if return_trace else tour
+
+    center0 = points.mean(axis=0)
+    R0 = float(np.linalg.norm(points - center0, axis=1).max())
+    start_pos = center0 + R0 * np.array([math.cos(start_angle), math.sin(start_angle)])
+
+    remaining = set(range(n))
+    tour = []
+    cur_center, cur_radius, cur_pos, cur_theta = center0, R0, start_pos, start_angle
+    trace = [{"type": "start", "center": cur_center.copy(), "radius": cur_radius,
+              "cur_pos": cur_pos.copy(), "path": []}]
+
+    if max_recalcs is None:
+        max_recalcs = max(20, 4 * n)
+    recalcs = 0
+
+    def forward_offset(phi, theta):
+        return (theta - phi) % (2 * math.pi) if direction < 0 else (phi - theta) % (2 * math.pi)
+
+    while remaining:
+        idx_list = list(remaining)
+        vecs = points[idx_list] - cur_center
+        phis = np.arctan2(vecs[:, 1], vecs[:, 0])
+        offsets = np.array([forward_offset(p, cur_theta) for p in phis])
+        kept_mask = offsets <= math.pi
+
+        if kept_mask.any():
+            kept_idx = np.array(idx_list)[kept_mask]
+            best = int(kept_idx[np.argmin(offsets[kept_mask])])
+            disqualified = [i for i, m in zip(idx_list, kept_mask) if not m]
+
+            tour.append(best)
+            remaining.discard(best)
+            cur_pos = points[best]
+            cur_theta = math.atan2(cur_pos[1] - cur_center[1], cur_pos[0] - cur_center[0])
+            trace.append({"type": "select", "center": cur_center.copy(), "radius": cur_radius,
+                          "selected": best, "disqualified": disqualified,
+                          "cur_pos": cur_pos.copy(), "path": list(tour)})
+        else:
+            recalcs += 1
+            if recalcs > max_recalcs or len(remaining) <= 1:
+                break
+            rem_pts = points[list(remaining)]
+            new_center = rem_pts.mean(axis=0)
+            new_R = float(np.linalg.norm(rem_pts - new_center, axis=1).max())
+            if new_R < 1e-12:
+                break
+            theta_snap = math.atan2(cur_pos[1] - new_center[1], cur_pos[0] - new_center[0])
+            cur_pos = new_center + new_R * np.array([math.cos(theta_snap), math.sin(theta_snap)])
+            cur_center, cur_radius, cur_theta = new_center, new_R, theta_snap
+            trace.append({"type": "recalc", "center": cur_center.copy(), "radius": cur_radius,
+                          "cur_pos": cur_pos.copy(), "path": list(tour)})
+
+    leftover = list(remaining)
+    if leftover:
+        def ang0(i):
+            v = points[i] - center0
+            return math.atan2(v[1], v[0])
+
+        for q in sorted(leftover, key=lambda i: (ang0(i) - start_angle) % (2 * math.pi)):
+            aq = ang0(q)
+            best_pos = min(range(len(tour)), key=lambda p: _circular_distance(ang0(tour[p]), aq))
+            tour.insert(best_pos + 1, q)
+            trace.append({"type": "insert", "inserted": q, "after": tour[best_pos], "path": list(tour)})
+
+    if return_trace:
+        return tour, trace
+    return tour
+
+
+# ---------------------------------------------------------------------------
 # Baselines
 # ---------------------------------------------------------------------------
 
