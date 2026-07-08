@@ -1,11 +1,12 @@
 import csv
 import time
 
-from .geometry import random_points, tour_length
+from .geometry import clustered_points, random_points, tour_length
 from .heuristics import (
     angular_sort_tour,
     exact_tour,
     nearest_neighbor_2opt_tour,
+    orbit_recenter_clustered_tour,
     orbit_recenter_tour,
     shrink_wrap_tour,
 )
@@ -14,23 +15,29 @@ METHODS = {
     "angular": angular_sort_tour,
     "shrinkwrap": shrink_wrap_tour,
     "orbit": orbit_recenter_tour,
+    "orbit_clustered": orbit_recenter_clustered_tour,
     "nn2opt": nearest_neighbor_2opt_tour,
 }
 
 EXACT_MAX_N = 13  # Held-Karp is O(2^n n^2); keep the benchmark fast
 
 
-def run_benchmark(ns=(6, 8, 10, 12, 15, 20, 30, 50, 75), trials=5, seed=0):
+def run_benchmark(ns=(6, 8, 10, 12, 15, 20, 30, 50, 75), trials=5, seed=0, point_generator=None):
     """Run every method on `trials` random instances per n. When n is small
     enough, the Held-Karp exact solution is used as the quality reference
     ('best'); otherwise the best tour found by any method on that instance
-    stands in as the reference, and is labeled accordingly."""
+    stands in as the reference, and is labeled accordingly.
+
+    `point_generator(n, seed=...)` defaults to `random_points` (uniform);
+    pass `clustered_points` to see how the methods -- especially
+    orbit_clustered -- do on data with genuine cluster structure."""
+    point_generator = point_generator or random_points
     records = []
     rng_seed = seed
     for n in ns:
         for trial in range(trials):
             rng_seed += 1
-            pts = random_points(n, seed=rng_seed)
+            pts = point_generator(n, seed=rng_seed)
             lengths = {}
 
             for name, fn in METHODS.items():

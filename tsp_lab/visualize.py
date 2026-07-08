@@ -6,7 +6,7 @@ import matplotlib.patches as patches
 import numpy as np
 from matplotlib.animation import FuncAnimation, PillowWriter
 
-from .heuristics import bounding_circle
+from .heuristics import bounding_circle, cluster_by_threshold
 
 # --- theme (dataviz skill palette: fixed categorical order, light surface) ---
 SURFACE = "#fcfcfb"
@@ -17,11 +17,12 @@ GRID = "#e1e0d9"
 AXIS = "#c3c2b7"
 
 METHOD_COLORS = {
-    "exact": "#2a78d6",       # categorical slot 1 (blue)
-    "nn2opt": "#1baf7a",      # categorical slot 2 (aqua)
-    "angular": "#eda100",     # categorical slot 3 (yellow)
-    "shrinkwrap": "#4a3aa7",  # categorical slot 5 (violet)
-    "orbit": "#e34948",       # categorical slot 6 (red)
+    "exact": "#2a78d6",         # categorical slot 1 (blue)
+    "nn2opt": "#1baf7a",        # categorical slot 2 (aqua)
+    "angular": "#eda100",       # categorical slot 3 (yellow)
+    "shrinkwrap": "#4a3aa7",    # categorical slot 5 (violet)
+    "orbit": "#e34948",         # categorical slot 6 (red)
+    "orbit_clustered": "#e87ba4",  # categorical slot 7 (magenta)
 }
 METHOD_LABELS = {
     "exact": "Exact (Held–Karp)",
@@ -29,6 +30,7 @@ METHOD_LABELS = {
     "angular": "Angular Sort (wedge)",
     "shrinkwrap": "Shrink-Wrap (vacuum bag)",
     "orbit": "Orbit & Recenter",
+    "orbit_clustered": "Orbit & Recenter + clustering",
 }
 
 def _style_ax(ax, equal=True):
@@ -262,10 +264,39 @@ def animate_orbit_recenter(points, tour, trace, save_path, fps=2):
 
 
 # ---------------------------------------------------------------------------
+# Illustration of the recursive-clustering wrapper's cluster assignment
+# ---------------------------------------------------------------------------
+
+def plot_cluster_structure(points, save_path, threshold=None, title=None):
+    clusters = cluster_by_threshold(points, threshold)
+    fig, ax = plt.subplots(figsize=(6, 6), facecolor=SURFACE)
+    _style_ax(ax)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    cmap = plt.get_cmap("tab10")
+    for i, idx in enumerate(clusters):
+        color = cmap(i % 10)
+        pts = points[idx]
+        ax.scatter(pts[:, 0], pts[:, 1], s=34, color=color, zorder=3,
+                  edgecolors=SURFACE, linewidths=0.6)
+        if len(idx) > 1:
+            ax.scatter(*pts.mean(axis=0), marker="x", s=55, color=INK, zorder=4)
+
+    ax.set_title(title or f"{len(clusters)} clusters found (MST-gap threshold)",
+                fontsize=10.5, color=INK, loc="left")
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=160, bbox_inches="tight", facecolor=SURFACE)
+    plt.close(fig)
+    return save_path
+
+
+# ---------------------------------------------------------------------------
 # Benchmark plots
 # ---------------------------------------------------------------------------
 
-def plot_benchmark(records, save_path, methods=("exact", "nn2opt", "angular", "shrinkwrap", "orbit")):
+def plot_benchmark(records, save_path,
+                   methods=("exact", "nn2opt", "angular", "shrinkwrap", "orbit", "orbit_clustered")):
     ns = sorted(set(r["n"] for r in records))
     fig, (ax_q, ax_t) = plt.subplots(1, 2, figsize=(11, 4.6), facecolor=SURFACE)
     for ax in (ax_q, ax_t):

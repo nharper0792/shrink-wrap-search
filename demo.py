@@ -9,6 +9,7 @@ from tsp_lab.heuristics import (
     angular_sort_tour,
     exact_tour,
     nearest_neighbor_2opt_tour,
+    orbit_recenter_clustered_tour,
     orbit_recenter_tour,
     shrink_wrap_tour,
 )
@@ -17,6 +18,7 @@ from tsp_lab.visualize import (
     animate_orbit_recenter,
     animate_shrink_wrap,
     plot_benchmark,
+    plot_cluster_structure,
     plot_static_comparison,
 )
 
@@ -39,15 +41,18 @@ def run_static_comparison(points, outdir, exact_max_n=13):
     tour, dt = timed(orbit_recenter_tour, points)
     results["orbit"] = {"tour": tour, "length": tour_length(points, tour), "time": dt}
 
+    tour, dt = timed(orbit_recenter_clustered_tour, points)
+    results["orbit_clustered"] = {"tour": tour, "length": tour_length(points, tour), "time": dt}
+
     tour, dt = timed(nearest_neighbor_2opt_tour, points)
     results["nn2opt"] = {"tour": tour, "length": tour_length(points, tour), "time": dt}
 
+    order = ["nn2opt", "angular", "shrinkwrap", "orbit", "orbit_clustered"]
     if len(points) <= exact_max_n:
         tour, dt = timed(exact_tour, points)
         results["exact"] = {"tour": tour, "length": tour_length(points, tour), "time": dt}
-        ordered = {k: results[k] for k in ["exact", "nn2opt", "angular", "shrinkwrap", "orbit"]}
-    else:
-        ordered = {k: results[k] for k in ["nn2opt", "angular", "shrinkwrap", "orbit"]}
+        order = ["exact"] + order
+    ordered = {k: results[k] for k in order}
 
     path = os.path.join(outdir, "comparison.png")
     plot_static_comparison(
@@ -82,43 +87,58 @@ def main():
     else:
         points = clustered_points(args.n, seed=args.seed)
 
-    print(f"[1/5] Static comparison (n={args.n}, {args.distribution})...")
+    print(f"[1/6] Static comparison (n={args.n}, {args.distribution})...")
     path, ordered = run_static_comparison(points, args.outdir)
     print(f"  saved {path}")
     for k, r in ordered.items():
-        print(f"    {k:12s} length={r['length']:.2f}  time={r['time']*1000:.3f} ms")
+        print(f"    {k:16s} length={r['length']:.2f}  time={r['time']*1000:.3f} ms")
 
     if not args.skip_animations:
         anim_points = (random_points(args.anim_n, seed=args.anim_seed) if args.distribution == "uniform"
                        else clustered_points(args.anim_n, seed=args.anim_seed))
 
-        print("[2/5] Angular-sort sweep animation...")
+        print("[2/6] Angular-sort sweep animation...")
         p1 = animate_angular_sweep(anim_points, os.path.join(args.outdir, "angular_sweep.gif"))
         print(f"  saved {p1}")
 
-        print("[3/5] Shrink-wrap peeling animation...")
+        print("[3/6] Shrink-wrap peeling animation...")
         tour, trace = shrink_wrap_tour(anim_points, return_trace=True)
         p2 = animate_shrink_wrap(anim_points, tour, trace, os.path.join(args.outdir, "shrink_wrap.gif"))
         print(f"  saved {p2}")
 
-        print("[4/5] Orbit & recenter animation...")
+        print("[4/6] Orbit & recenter animation...")
         tour, trace = orbit_recenter_tour(anim_points, return_trace=True)
         p3 = animate_orbit_recenter(anim_points, tour, trace, os.path.join(args.outdir, "orbit_recenter.gif"))
         print(f"  saved {p3}")
     else:
-        print("[2/5] Skipping animations")
-        print("[3/5] Skipping animations")
-        print("[4/5] Skipping animations")
+        print("[2/6] Skipping animations")
+        print("[3/6] Skipping animations")
+        print("[4/6] Skipping animations")
+
+    print("[5/6] Cluster structure illustration...")
+    cluster_demo_points = clustered_points(max(args.anim_n, 40), seed=args.anim_seed,
+                                           n_clusters=5, spread=3.0)
+    p4 = plot_cluster_structure(cluster_demo_points, os.path.join(args.outdir, "cluster_structure.png"))
+    print(f"  saved {p4}")
 
     if not args.skip_benchmark:
-        print(f"[5/5] Benchmark across n={args.benchmark_ns} ({args.benchmark_trials} trials each)...")
+        print(f"[6/6] Benchmark across n={args.benchmark_ns} ({args.benchmark_trials} trials each, uniform)...")
         records = run_benchmark(ns=args.benchmark_ns, trials=args.benchmark_trials, seed=args.seed)
         csv_path = save_csv(records, os.path.join(args.outdir, "benchmark.csv"))
         plot_path = plot_benchmark(records, os.path.join(args.outdir, "benchmark.png"))
         print(f"  saved {csv_path}")
         print(f"  saved {plot_path}")
+
+        print(f"      Benchmark across n={args.benchmark_ns} ({args.benchmark_trials} trials each, clustered)...")
+        cluster_gen = lambda n, seed: clustered_points(n, seed=seed, n_clusters=5, spread=3.0)
+        records_c = run_benchmark(ns=args.benchmark_ns, trials=args.benchmark_trials, seed=args.seed,
+                                  point_generator=cluster_gen)
+        csv_path_c = save_csv(records_c, os.path.join(args.outdir, "benchmark_clustered.csv"))
+        plot_path_c = plot_benchmark(records_c, os.path.join(args.outdir, "benchmark_clustered.png"))
+        print(f"  saved {csv_path_c}")
+        print(f"  saved {plot_path_c}")
     else:
-        print("[5/5] Skipping benchmark")
+        print("[6/6] Skipping benchmark")
 
 
 if __name__ == "__main__":

@@ -291,3 +291,108 @@ def held_karp_tour(points, max_n=15, force=False):
 def exact_tour(points, max_n=15, force=False):
     """Best available exact method for the given size."""
     return held_karp_tour(points, max_n=max_n, force=force)
+
+
+# ---------------------------------------------------------------------------
+# Recursive clustering wrapper
+#
+# Group points into clusters of mutually "sufficiently close" points
+# (connected components under a distance threshold), treat each cluster as
+# a single point at its centroid, and run the same tour-construction
+# function on those centroids to get a macro-order of clusters. Then
+# recurse into each cluster to order its actual points the same way, and
+# concatenate in macro-order. Works with any of the tour functions above.
+#
+# The default threshold is picked from the minimum spanning tree: sort the
+# MST edge weights and cut at the biggest relative jump (gap) between
+# consecutive weights, taking the geometric mean of the two edges around
+# that jump. This is the standard trick for turning single-linkage
+# clustering into something that doesn't need a pre-chosen cluster count --
+# it naturally finds a handful of clusters on genuinely separated data, and
+# degrades to near-singleton "clusters" (i.e. a no-op once `clustered_tour`
+# falls back to the base algorithm) on data with no real cluster structure,
+# since there's no standout gap to cut at.
+# ---------------------------------------------------------------------------
+
+def _mst_edge_weights(points):
+    n = len(points)
+    if n <= 1:
+        return np.array([])
+    dmat = np.linalg.norm(points[:, None, :] - points[None, :, :], axis=-1)
+    in_tree = np.zeros(n, dtype=bool)
+    in_tree[0] = True
+    key = dmat[0].copy()
+    key[0] = np.inf
+    weights = []
+    for _ in range(n - 1):
+        masked = np.where(in_tree, np.inf, key)
+        u = int(np.argmin(masked))
+        weights.append(float(masked[u]))
+        in_tree[u] = True
+        key = np.minimum(key, dmat[u])
+    return np.array(weights)
+
+
+def _default_cluster_threshold(points):
+    w = np.sort(_mst_edge_weights(points))
+    if len(w) < 2:
+        return float(w[0]) * 1.5 if len(w) else 0.0
+    ratios = w[1:] / np.maximum(w[:-1], 1e-9)
+    gap_i = int(np.argmax(ratios))
+    return float(math.sqrt(w[gap_i] * w[gap_i + 1]))
+
+
+def cluster_by_threshold(points, threshold=None):
+    """Connected components under 'distance <= threshold'. Returns a list of
+    index-arrays (relative to `points`)."""
+    n = len(points)
+    if n == 0:
+        return []
+    if threshold is None:
+        threshold = _default_cluster_threshold(points)
+    dmat = np.linalg.norm(points[:, None, :] - points[None, :, :], axis=-1)
+    adj = dmat <= threshold
+
+    visited = np.zeros(n, dtype=bool)
+    clusters = []
+    for i in range(n):
+        if visited[i]:
+            continue
+        stack, comp = [i], []
+        visited[i] = True
+        while stack:
+            u = stack.pop()
+            comp.append(u)
+            for v in np.nonzero(adj[u] & ~visited)[0]:
+                visited[v] = True
+                stack.append(v)
+        clusters.append(np.array(comp))
+    return clusters
+
+
+def clustered_tour(points, base_tour_fn, threshold=None, min_cluster_size=4, max_depth=6, _depth=0):
+    n = len(points)
+    if n <= min_cluster_size or _depth >= max_depth:
+        return base_tour_fn(points)
+
+    clusters = cluster_by_threshold(points, threshold)
+    if len(clusters) <= 1:
+        return base_tour_fn(points)
+
+    centroids = np.array([points[c].mean(axis=0) for c in clusters])
+    macro_order = base_tour_fn(centroids)
+
+    tour = []
+    for ci in macro_order:
+        idx = clusters[ci]
+        if len(idx) == 1:
+            tour.append(int(idx[0]))
+        else:
+            sub_tour = clustered_tour(points[idx], base_tour_fn, threshold, min_cluster_size,
+                                      max_depth, _depth + 1)
+            tour.extend(int(idx[i]) for i in sub_tour)
+    return tour
+
+
+def orbit_recenter_clustered_tour(points, **kwargs):
+    return clustered_tour(points, orbit_recenter_tour, **kwargs)

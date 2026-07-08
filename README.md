@@ -48,7 +48,25 @@ solver and a real fast heuristic:
    is always exactly centered on the true centroid of the candidate set
    being tested, so the same guarantee applies fresh on every leg).
 
-All three are compared against:
+Plus a meta-heuristic that wraps any of the three: **recursive clustering**
+(`tsp_lab/heuristics.py::clustered_tour`, convenience wrapper
+`orbit_recenter_clustered_tour`). Group points into clusters of mutually
+"sufficiently close" points (connected components under a distance
+threshold), collapse each cluster to its centroid, run the *same* tour
+function on those centroids to get a macro-order of clusters, then recurse
+into each cluster to order its actual points the same way, and concatenate
+in macro-order. The threshold is picked automatically from the minimum
+spanning tree: sort the MST edge weights and cut at the single biggest
+relative jump between consecutive weights. That's the standard trick for
+single-linkage clustering without a pre-chosen cluster count — it finds a
+handful of clusters on genuinely separated data, and degrades to
+near-singleton "clusters" (i.e. a no-op, since `clustered_tour` falls back
+to running the base algorithm directly once clustering finds nothing) on
+data with no real structure, since there's no standout gap to cut at.
+`output/cluster_structure.png` shows what the threshold actually finds on
+a 5-blob synthetic instance.
+
+All of the above are compared against:
 
 - **Exact (Held–Karp)** — DP, optimal, O(2^n · n²), practical to n ≈ 13.
 - **Nearest-Neighbor + 2-opt** — a standard fast heuristic, used as the
@@ -74,13 +92,13 @@ into the hundreds of points where the exact methods become impossible.
 From `output/benchmark.png` / `benchmark.csv` (median tour length ÷
 best-known length, uniform random points, 5 trials per size):
 
-| n  | Nearest-Neighbor+2opt | Angular Sort | Shrink-Wrap | Orbit & Recenter |
-|----|------------------------|--------------|-------------|-------------------|
-| 6  | 1.00                   | 1.00         | 1.00        | 1.00              |
-| 10 | 1.00                   | 1.00         | 1.02        | 1.03              |
-| 20 | 1.00                   | 1.16         | 1.03        | 1.15              |
-| 50 | 1.00                   | 1.45         | 1.06        | 1.35              |
-| 75 | 1.00                   | 1.65         | 1.10        | 1.88              |
+| n  | NN+2opt | Angular Sort | Shrink-Wrap | Orbit & Recenter | Orbit + clustering |
+|----|---------|--------------|-------------|-------------------|---------------------|
+| 6  | 1.00    | 1.00         | 1.00        | 1.00              | 1.04                |
+| 10 | 1.00    | 1.00         | 1.02        | 1.03              | 1.07                |
+| 20 | 1.00    | 1.16         | 1.03        | 1.15              | 1.20                |
+| 50 | 1.00    | 1.45         | 1.06        | 1.35              | 1.45                |
+| 75 | 1.00    | 1.65         | 1.10        | 1.88              | 1.79                |
 
 Angular Sort degrades steadily as n grows — by n=75 it's running 65% longer
 than nearest-neighbor+2-opt, because it never compares candidate edges
@@ -104,29 +122,23 @@ and animation both show visible self-crossings that neither Angular Sort
 nor Shrink-Wrap produce. Continuously re-centering sounds like it should
 help (it's the same instinct behind Shrink-Wrap), but here it actively
 fights the "keep moving in one direction" constraint rather than
-complementing it. All three heuristics are still 1-3 orders of magnitude
-faster than 2-opt at n=75 (see the runtime panel).
+complementing it. All heuristics are still 1-3 orders of magnitude faster
+than 2-opt at n=75 (see the runtime panel).
 
-## Running it
-
-```bash
-pip install -r requirements.txt
-
-# static comparison + both animations + benchmark, all in ./output
-python demo.py --n 12 --seed 1
-
-# just the benchmark, larger sweep
-python demo.py --skip-animations --benchmark-ns 10 20 40 80 160 --benchmark-trials 8
-
-# literal brute force instead of Held-Karp, for small n
-python -c "
-from tsp_lab.geometry import random_points, tour_length
-from tsp_lab.heuristics import brute_force_tour
-pts = random_points(9, seed=3)
-tour = brute_force_tour(pts)
-print(tour, tour_length(pts, tour))
-"
-```
+Wrapping Orbit & Recenter in recursive clustering doesn't help on *uniform*
+data — slightly worse at every size in the table above, which makes sense:
+there's no real cluster structure to exploit, so the MST-gap threshold
+mostly just carves the cloud into small arbitrary groups and adds macro/
+micro-stitching overhead for nothing. But on data with genuine cluster
+structure (`output/benchmark_clustered.png`, five well-separated Gaussian
+blobs) it's a real, if partial, fix: at n=75, plain Orbit & Recenter scores
+1.74 vs. clustering's 1.30 — most of the way back to Shrink-Wrap's 1.13 on
+the same data. The clustering wrapper doesn't change what happens *inside*
+a cluster (the self-crossing problem can still happen there), but it stops
+the walker from being dragged across the whole canvas by a distant
+recentering — each cluster gets solved as its own small, contained problem,
+and only the macro-order between cluster centroids has to deal with the
+long-range structure.
 
 Outputs land in `output/`:
 
@@ -138,15 +150,51 @@ Outputs land in `output/`:
   placed, and the dotted triangle shows the edge it just snapped into.
 - `orbit_recenter.gif` — the dashed circle jumps and resizes after every
   point as it recenters on what's left; the open marker is the walker.
-- `benchmark.png` / `benchmark.csv` — solution quality and runtime vs. n
-  across repeated random instances.
+- `cluster_structure.png` — what the MST-gap threshold finds on a synthetic
+  5-blob instance (each color/✕ is one cluster and its centroid).
+- `benchmark.png` / `benchmark.csv` — solution quality and runtime vs. n,
+  uniform random instances.
+- `benchmark_clustered.png` / `benchmark_clustered.csv` — the same sweep on
+  genuinely clustered instances, to see where the clustering wrapper
+  actually earns its keep.
+
+## Running it
+
+```bash
+pip install -r requirements.txt
+
+# static comparison + animations + both benchmark sweeps, all in ./output
+python demo.py --n 12 --seed 1
+
+# just the benchmarks, larger sweep
+python demo.py --skip-animations --benchmark-ns 10 20 40 80 160 --benchmark-trials 8
+
+# literal brute force instead of Held-Karp, for small n
+python -c "
+from tsp_lab.geometry import random_points, tour_length
+from tsp_lab.heuristics import brute_force_tour
+pts = random_points(9, seed=3)
+tour = brute_force_tour(pts)
+print(tour, tour_length(pts, tour))
+"
+
+# wrap any of the three heuristics in recursive clustering
+python -c "
+from tsp_lab.geometry import clustered_points, tour_length
+from tsp_lab.heuristics import clustered_tour, shrink_wrap_tour
+pts = clustered_points(80, seed=1, n_clusters=6, spread=3.0)
+tour = clustered_tour(pts, shrink_wrap_tour)
+print(tour_length(pts, tour))
+"
+```
 
 ## Layout
 
 ```
 tsp_lab/
   geometry.py     point generation, tour length, centroid
-  heuristics.py   all three heuristics + brute force / Held-Karp / NN+2-opt baselines
+  heuristics.py   all three heuristics + the clustering wrapper +
+                  brute force / Held-Karp / NN+2-opt baselines
   benchmark.py    run all methods across n and seeds, save CSV
   visualize.py    static comparison plot, animations, benchmark plots
 demo.py           CLI entry point that runs everything above
