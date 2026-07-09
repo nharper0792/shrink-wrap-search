@@ -37,6 +37,7 @@ METHOD_COLORS = {
     "orbit_every10": "#a52a2a",
     "orbit_noncross": "#7a1f1f",
     "orbit_2opt": "#7d0f0f",
+    "orbit_tangent": "#c9645f",
 
     "orbit_clustered_v2": "#c14c7c",
     "shrinkwrap_clustered": "#7a1f47",
@@ -60,6 +61,7 @@ METHOD_LABELS = {
     "orbit_every10": "Orbit, recenter every 10",
     "orbit_noncross": "Orbit + crossing-avoidance",
     "orbit_2opt": "Orbit + 2-opt",
+    "orbit_tangent": "Orbit + tangent-line marching",
 
     "orbit_clustered_v2": "Orbit + clustering (endpoint-opt)",
     "shrinkwrap_clustered": "Shrink-Wrap + clustering (endpoint-opt)",

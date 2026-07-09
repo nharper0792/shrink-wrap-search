@@ -311,8 +311,37 @@ def _radius_midrange(pts, center):
     return float((d.min() + d.max()) / 2)
 
 
+def _tangent_snap_position(cur_pos, cur_theta, direction, new_center, new_R):
+    """Instead of snapping radially onto the new circle (preserving angle
+    around the new center), continue in a straight line along the walker's
+    current heading -- the tangent direction of the *old* circle at
+    cur_pos -- until that line grazes the new circle. An external point has
+    two tangent lines to a circle; this picks whichever is more aligned
+    with the heading already in use, so the walker's path bends as little
+    as possible instead of teleporting. Falls back to the radial snap when
+    cur_pos is inside or on the new circle, where no real tangent line
+    exists."""
+    heading = direction * np.array([-math.sin(cur_theta), math.cos(cur_theta)])
+    d_vec = new_center - cur_pos
+    d = float(np.linalg.norm(d_vec))
+    if new_R > 1e-12 and d > new_R + 1e-9:
+        alpha = math.atan2(d_vec[1], d_vec[0])
+        theta_t = math.asin(new_R / d)
+        L = math.sqrt(d * d - new_R * new_R)
+        best_pos, best_cos = None, -math.inf
+        for sign in (1.0, -1.0):
+            tangent_dir = np.array([math.cos(alpha + sign * theta_t), math.sin(alpha + sign * theta_t)])
+            cos_align = float(np.dot(tangent_dir, heading))
+            if cos_align > best_cos:
+                best_cos, best_pos = cos_align, cur_pos + L * tangent_dir
+        return best_pos
+    theta_fallback = (math.atan2(cur_pos[1] - new_center[1], cur_pos[0] - new_center[0])
+                      if np.linalg.norm(cur_pos - new_center) > 1e-12 else cur_theta)
+    return new_center + new_R * np.array([math.cos(theta_fallback), math.sin(theta_fallback)])
+
+
 def orbit_recenter_tour(points, direction=-1, start_angle=0.0, recenter_every=1,
-                        select_fn=None, radius_fn=None, return_trace=False):
+                        select_fn=None, radius_fn=None, tangent_snap=False, return_trace=False):
     """recenter_every=1 recalculates the circle after every point (the
     original design); larger values orbit the same circle for several picks
     before recentering. select_fn(idx_list, offsets, points, cur_pos, tour)
@@ -320,7 +349,10 @@ def orbit_recenter_tour(points, direction=-1, start_angle=0.0, recenter_every=1,
     defaults to smallest offset; pass _select_min_offset_noncross to add a
     self-intersection check. radius_fn(points, center) computes the circle's
     radius (default: bounding/max distance) -- see the module docstring note
-    below on why this turns out not to matter."""
+    below on why this turns out not to matter. tangent_snap=True replaces
+    the radial snap onto a recentered circle with a straight tangent-line
+    march biased towards the walker's current heading -- see
+    _tangent_snap_position."""
     select_fn = select_fn or _select_min_offset
     radius_fn = radius_fn or _radius_bounding
     n = len(points)
@@ -350,18 +382,23 @@ def orbit_recenter_tour(points, direction=-1, start_angle=0.0, recenter_every=1,
             rem_pts = points[rem_idx]
             new_center = rem_pts.mean(axis=0)
             new_R = radius_fn(rem_pts, new_center)
-            # NB: the fallback condition below is about whether cur_pos and
-            # new_center coincide (an undefined angle), not about new_R --
-            # checking new_R here was a latent bug: a radius metric that can
-            # be ~0 even when cur_pos and new_center are far apart (e.g.
-            # std-dev of exactly 2 equidistant points is always 0) would
-            # wrongly skip updating the bearing, making the algorithm
-            # depend on *which* radius_fn was passed for reasons that have
-            # nothing to do with geometry. See README "Round 4".
-            theta_snap = (math.atan2(cur_pos[1] - new_center[1], cur_pos[0] - new_center[0])
-                          if np.linalg.norm(cur_pos - new_center) > 1e-12 else cur_theta)
-            cur_pos = new_center + new_R * np.array([math.cos(theta_snap), math.sin(theta_snap)])
-            cur_center, cur_radius, cur_theta = new_center, new_R, theta_snap
+            if tangent_snap:
+                cur_pos = _tangent_snap_position(cur_pos, cur_theta, direction, new_center, new_R)
+            else:
+                # NB: the fallback condition below is about whether cur_pos
+                # and new_center coincide (an undefined angle), not about
+                # new_R -- checking new_R here was a latent bug: a radius
+                # metric that can be ~0 even when cur_pos and new_center are
+                # far apart (e.g. std-dev of exactly 2 equidistant points is
+                # always 0) would wrongly skip updating the bearing, making
+                # the algorithm depend on *which* radius_fn was passed for
+                # reasons that have nothing to do with geometry. See README
+                # "Round 4".
+                theta_snap = (math.atan2(cur_pos[1] - new_center[1], cur_pos[0] - new_center[0])
+                              if np.linalg.norm(cur_pos - new_center) > 1e-12 else cur_theta)
+                cur_pos = new_center + new_R * np.array([math.cos(theta_snap), math.sin(theta_snap)])
+            cur_theta = math.atan2(cur_pos[1] - new_center[1], cur_pos[0] - new_center[0])
+            cur_center, cur_radius = new_center, new_R
             trace.append({"type": "recalc", "center": cur_center.copy(), "radius": cur_radius,
                           "cur_pos": cur_pos.copy(), "path": list(tour)})
             since_recenter = 0
@@ -412,6 +449,10 @@ def orbit_recenter_2opt_tour(points):
     wraparound included), so unlike orbit_recenter_noncross_tour this
     actually eliminates the self-crossings."""
     return two_opt(points, orbit_recenter_tour(points))
+
+
+def orbit_recenter_tangent_tour(points, **kwargs):
+    return orbit_recenter_tour(points, tangent_snap=True, **kwargs)
 
 
 # ---------------------------------------------------------------------------

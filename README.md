@@ -278,6 +278,40 @@ it's a free parameter with no effect on output — the real levers are the
 center (recentering) and the recenter frequency, both already covered in
 Round 2.
 
+## Round 5: marching along a tangent line instead of snapping radially
+
+The default recentering behavior "teleports" the walker onto the new
+circle at the angle that preserves its bearing from the old center. An
+alternative: instead of preserving the angle, have the walker continue in
+a straight line along the direction it was *already heading* (the tangent
+direction of the old circle at its current position) until that line
+grazes the new circle, then resume orbiting from there. A point outside a
+circle has exactly two tangent lines to it; `orbit_recenter_tangent_tour`
+(`tangent_snap=True` on `orbit_recenter_tour`) picks whichever one bends
+the walker's path least. Falls back to the radial snap in the (rare) case
+where the walker ends up inside the new circle, where no real tangent
+line exists.
+
+It's a real behavior change this time — unlike the radius experiments,
+tangent-line marching is **consistently worse**: median 1.22-1.31×
+longer than the radial-snap default across n=10-75 (20 seeds each,
+uniform random points), beating the default in fewer than 5% of trials
+even at n=75.
+
+The reason is worth spelling out, because it's the same trap the
+crossing-avoidance idea (Round 2) fell into from a different angle: this
+algorithm has no notion of "distance traveled by the walker" in its cost
+function. `tour_length` only sums distances between the *actual selected
+points*, in order — the virtual march between circles is pure
+bookkeeping that exists only to produce a bearing (`cur_theta`) for the
+next selection. A "smoother," less sharply-bending path sounds like it
+should help, by analogy with a real walker minimizing travel — but
+nothing here is minimizing travel; the only thing that matters is which
+angle the walker arrives at, because that determines which point gets
+picked next. Preserving the angle directly (the radial snap) turns out to
+correlate with useful next-picks better than deriving a new angle from a
+tangent-line construction that optimizes for path smoothness instead.
+
 ## Outputs
 
 Outputs land in `output/`:
