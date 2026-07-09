@@ -370,6 +370,75 @@ interesting *construction rule* of everything tried in this project
 (Round 1-2), but "the standard, boring techniques, implemented properly"
 is still the thing to reach for at real high-volume scale.
 
+## Round 7: a fourth idea — wedge & radial fragments
+
+A new construction idea, tested as its own family from scratch:
+
+1. Take the centroid of whatever points are still unplaced.
+2. Select the point closest to that centroid (the "anchor").
+3. Capture every other unplaced point within an angular wedge around the
+   centroid-to-anchor direction, and order the captured set (anchor
+   included) by the *signed* angular offset from that direction — negative
+   offset = "before" the anchor, positive = "after", so the anchor always
+   sits in the middle of a small fan-shaped fragment rather than at one
+   end. (An earlier draft ordered by distance from the centroid instead;
+   corrected after clarification — see `plot_wedge_fragments`, which shows
+   the fragments visibly fanning out from each anchor once fixed, instead
+   of the radial spikes the first version produced.)
+4. Repeat against whatever's left until every point belongs to some
+   fragment, then merge fragments into one tour by repeatedly joining
+   whichever two fragment endpoints (from different fragments, checking
+   all four head/tail combinations) are closest, until one remains.
+
+`wedge_radial_tour`. A second variant, `wedge_tip_tour`, moves the
+wedge's apex from the centroid onto the anchor point itself — a cone
+reaching outward from the anchor rather than a pie-slice through the
+centroid — ordering its captures by distance from the anchor (nearest
+first) instead of angle, since a point-apex cone has no "before" side to
+fan into. A cone from a point sweeps far less area than a pie-slice from
+the centroid at the same angle, so it needs a wider angle to capture a
+comparable number of points per cycle; tested angles from 2° to 150°
+anyway, and — for both variants — *narrower* consistently wins (best
+around 8-15°), with quality degrading smoothly as the wedge widens rather
+than there being a "wide is better" regime to find.
+
+The distinctive, and frankly rough, result: **raw construction quality
+degrades sharply with n**, unlike every other heuristic in this project
+(Angular Sort, Shrink-Wrap, Orbit & Recenter, Hilbert, nearest-neighbor —
+all stay roughly flat, 1.1-1.5× best-known regardless of n). Wedge &
+Radial Fragments instead climbs from ~2.5× at n=200 to ~24× at n=20,000
+(`wedge_radial`) — worse than everything else tested in this entire
+project by a wide margin, and the only heuristic whose relative quality
+visibly worsens with scale rather than holding steady.
+
+| n | Wedge&Radial (raw) | +2-opt | Wedge-tip (raw) | +2-opt | NN(fast)+2opt | Hilbert+2opt | Shrink-Wrap(gridded)+2opt |
+|---|---|---|---|---|---|---|---|
+| 200 | 2.47× | 1.01× | 1.48× | 1.06× | 1.00× | 1.10× | 1.08× |
+| 1,000 | 5.40× | 1.03× | 1.99× | 1.06× | 1.00× | 1.11× | 1.06× |
+| 5,000-10,000 | 16.1× | 1.06× | 3.79× | 1.04× | 1.00× | 1.06× | 1.06× |
+| 20,000 | 23.5× | 1.10× | — | — | 1.00× | 1.07× | 1.07× |
+
+But cleaned up, it's a genuinely different story: at small-to-medium n
+(200-3,000), **`wedge_radial_2opt` is the best of the non-nearest-neighbor
+methods**, edging out both Hilbert+2-opt and Shrink-Wrap(gridded)+2-opt —
+the 2-opt cleanup pass fully absorbs the rough construction. That edge
+erodes and reverses by n=20,000 (1.10× vs. Hilbert's 1.07× and
+Shrink-Wrap's 1.07×), for two compounding reasons: the raw construction
+damage grows faster than 2-opt's ability to fix it, and — `wedge_tip`
+especially — narrow capture cones mean many more fragments (275 at
+n=30,000 vs. `wedge_radial`'s 63 at the same size), and the fragment
+-merging step is O(F³), so more fragments costs real time: `wedge_tip`
+takes 35s at n=30,000 against `wedge_radial`'s 0.47s for the same raw
+construction step, and `wedge_radial_2opt` is consistently the *slowest*
+full pipeline of anything benchmarked in Round 6 or 7 at large n.
+
+So: a construction rule that's bad on its own but gets fully rescued by
+local search at moderate scale, and genuinely the worst-scaling idea in
+the whole project once you actually push n up — a useful reminder that
+"looks fine after cleanup at n=1,000" and "still fine at n=20,000" are
+different claims, and this project's benchmarks now go far enough to
+tell them apart.
+
 ## Outputs
 
 Outputs land in `output/`:
@@ -400,6 +469,15 @@ Outputs land in `output/`:
 - `high_volume.png` / `high_volume.csv` — Shrink-Wrap (gridded) vs. actual
   standard practice (Hilbert curve, grid-accelerated nearest-neighbor,
   neighbor-list-restricted 2-opt) from n=1,000 to n=80,000.
+- `wedge_fragments.png` / `wedge_tip_fragments.png` — the fragments Wedge &
+  Radial Fragments builds before merging, one color per fragment (open
+  marker = anchor point) — the centroid-anchored version fans out from
+  each anchor, the point-apex version spikes outward from it.
+- `wedge_comparison.png` / `wedge_comparison_cleaned.png` (+ `.csv`) —
+  Wedge & Radial Fragments (raw and +2-opt) against Hilbert curve,
+  nearest-neighbor, and Shrink-Wrap (all gridded/fast + cleaned), n=200 to
+  n=20,000. The "cleaned" chart omits the raw construction lines so the
+  competitive +2-opt comparison is actually legible.
 
 ## Running it
 
@@ -448,13 +526,15 @@ print(tour_length(pts, tour))
 ```
 tsp_lab/
   geometry.py     point generation, tour length, centroid
-  heuristics.py   all three heuristics + their improvement variants +
-                  the clustering wrapper + brute force / Held-Karp /
+  heuristics.py   all three original heuristics + wedge & radial fragments
+                  (centroid-apex and point-apex variants) + their improvement
+                  variants + the clustering wrapper + brute force / Held-Karp /
                   NN+2-opt / 2-opt / Or-opt baselines and local search +
                   standard-practice-at-scale baselines (Hilbert curve,
                   grid-accelerated NN, neighbor-list 2-opt)
   benchmark.py    run a set of methods across n and seeds, save CSV
-  visualize.py    static comparison plot, animations, benchmark plots
+  visualize.py    static comparison plot, animations, benchmark plots,
+                  wedge fragment plots
 demo.py               CLI entry point for the original three-heuristic demo
 families.py           CLI entry point for the improvement-idea testing round
 scaling_test.py       CLI entry point for the O(n^2) vs O(n) scaling test

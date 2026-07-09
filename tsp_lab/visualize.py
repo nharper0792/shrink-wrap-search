@@ -51,6 +51,8 @@ METHOD_COLORS = {
 
     "wedge_radial": "#4fb3bf",
     "wedge_radial_2opt": "#0e5a63",
+    "wedge_tip": "#c9a86a",
+    "wedge_tip_2opt": "#7a5f2e",
 }
 METHOD_LABELS = {
     "exact": "Exact (Held–Karp)",
@@ -84,6 +86,8 @@ METHOD_LABELS = {
 
     "wedge_radial": "Wedge & Radial Fragments",
     "wedge_radial_2opt": "Wedge & Radial Fragments + 2-opt",
+    "wedge_tip": "Wedge & Radial Fragments (point-apex)",
+    "wedge_tip_2opt": "Wedge & Radial Fragments (point-apex) + 2-opt",
 }
 
 def _style_ax(ax, equal=True):

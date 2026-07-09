@@ -547,6 +547,75 @@ def wedge_radial_2opt_tour(points, wedge_half_angle_deg=15.0, k=8):
 
 
 # ---------------------------------------------------------------------------
+# Approach 4b: wedge with the apex at the selected point
+#
+# Same cycle structure as wedge_radial_tour (centroid of what's left, pick
+# the point closest to it), but the wedge's apex sits at that anchor point
+# itself instead of at the centroid, opening outward along the
+# centroid-to-anchor direction -- a cone reaching away from the middle of
+# the remaining points instead of a pie-slice through it. A cone anchored
+# on a point sweeps far less area nearby than a pie-slice from the
+# centroid at the same angle, so it needs a wider angle to capture a
+# comparable number of points per cycle -- hence the wider default here.
+# Points captured in the cone are ordered by distance from the anchor
+# (nearest first), since with the apex *at* the anchor there's no "before"
+# side to fan out into -- everything captured is already in front of it.
+# ---------------------------------------------------------------------------
+
+def wedge_tip_tour(points, wedge_half_angle_deg=45.0, return_trace=False):
+    n = len(points)
+    if n <= 2:
+        tour = list(range(n))
+        if return_trace:
+            return tour, {"fragments": [tour]}
+        return tour
+
+    half = math.radians(wedge_half_angle_deg)
+    remaining = set(range(n))
+    fragments = []
+
+    while remaining:
+        idx = list(remaining)
+        pts = points[idx]
+        centroid = pts.mean(axis=0)
+        d_centroid = np.linalg.norm(pts - centroid, axis=1)
+        anchor = idx[int(np.argmin(d_centroid))]
+        anchor_pos = points[anchor]
+
+        axis = anchor_pos - centroid
+        axis_norm = float(np.linalg.norm(axis))
+        if axis_norm < 1e-12:
+            # anchor coincides with the centroid -- no defined outward
+            # direction for a cone; just take this one point this cycle
+            fragments.append([anchor])
+            remaining.discard(anchor)
+            continue
+        axis_unit = axis / axis_norm
+
+        vecs = pts - anchor_pos
+        dist_from_anchor = np.linalg.norm(vecs, axis=1)
+        safe_dist = np.where(dist_from_anchor > 1e-12, dist_from_anchor, 1.0)
+        cos_angle = np.clip((vecs @ axis_unit) / safe_dist, -1.0, 1.0)
+        angle_diff = np.arccos(cos_angle)
+        captured_mask = (angle_diff <= half) | (dist_from_anchor <= 1e-12)
+        captured = [i for i, m in zip(idx, captured_mask) if m]
+        captured_dist = dist_from_anchor[captured_mask]
+
+        fragment = [captured[i] for i in np.argsort(captured_dist)]
+        fragments.append(fragment)
+        remaining.difference_update(captured)
+
+    tour = _merge_fragments_nearest(points, fragments)
+    if return_trace:
+        return tour, {"fragments": fragments}
+    return tour
+
+
+def wedge_tip_2opt_tour(points, wedge_half_angle_deg=45.0, k=8):
+    return neighbor_list_2opt(points, wedge_tip_tour(points, wedge_half_angle_deg=wedge_half_angle_deg), k=k)
+
+
+# ---------------------------------------------------------------------------
 # Baselines
 # ---------------------------------------------------------------------------
 
