@@ -312,6 +312,64 @@ picked next. Preserving the angle directly (the radial snap) turns out to
 correlate with useful next-picks better than deriving a new angle from a
 tangent-line construction that optimizes for path smoothness instead.
 
+## Round 6: does Shrink-Wrap actually beat standard practice at high volume?
+
+Earlier in this project, `shrink_wrap_gridded_tour` was compared against
+`nearest_neighbor_2opt_tour` and won on speed at scale (51x faster at
+n=6,400). That comparison was honest but not fair: naive nearest-neighbor
+is O(n²) and full 2-opt is O(n²) per pass, so `nearest_neighbor_2opt_tour`
+was never a real stand-in for "standard practice at high volume" — nobody
+actually runs that at n=80,000. This round builds the techniques real
+large-scale TSP practice actually uses and re-runs the comparison fairly:
+
+- **Hilbert curve sort** (`hilbert_curve_tour`) — sort points by position
+  along a space-filling curve. O(n log n), no iteration at all.
+- **Grid-accelerated nearest-neighbor** (`nearest_neighbor_fast_tour`) —
+  the same greedy rule as before, but each step queries the spatial grid
+  (built once) instead of scanning every remaining point. Verified to
+  produce byte-identical output to the slow version, just faster.
+- **Neighbor-list-restricted 2-opt** (`neighbor_list_2opt`) — 2-opt
+  checked only against each point's k-nearest-neighbor candidate list
+  (k=8) instead of all O(n) other edges. This candidate-list restriction
+  is the actual mechanism real solvers (Lin-Kernighan-style) use to make
+  local search scale — "check every pair" was never standard practice.
+
+Benchmarked all three, each with and without the neighbor-list 2-opt
+cleanup, against `shrink_wrap_gridded_tour` (+ the same cleanup) from
+n=1,000 to n=80,000 (`high_volume_test.py`, `output/high_volume.png`).
+Median ratio to the best tour found at each size:
+
+| n | Hilbert | Hilbert+2opt | NN (fast) | NN (fast)+2opt | Shrink-Wrap (gridded) | Shrink-Wrap+2opt |
+|---|---|---|---|---|---|---|
+| 1,000 | 1.24× | 1.09× | 1.14× | **1.00×** | 1.47× | 1.04× |
+| 10,000 | 1.24× | 1.06× | 1.12× | **1.00×** | 1.50× | 1.06× |
+| 80,000 | 1.25× | 1.06× | 1.13× | **1.00×** | 1.52× | 1.06× |
+
+The honest verdict: **no.** On raw construction, grid-accelerated
+nearest-neighbor beats both Hilbert curve and gridded Shrink-Wrap at
+every single size tested — Shrink-Wrap's grid-bounded search is
+consistently the *worst* of the three raw constructions, not competitive
+with plain nearest-neighbor the way the O(n²) version looked earlier.
+After the same cleanup pass, nearest-neighbor + neighbor-list 2-opt is
+the best of all six methods at every size, without exception. Shrink-Wrap
++ cleanup lands roughly tied with Hilbert + cleanup — sometimes a hair
+ahead, sometimes a hair behind — but it's also consistently the
+*slowest* full pipeline of the three at large n (78.7s vs. Hilbert's
+31.3s and nearest-neighbor's 67.8s at n=80,000), because it pays for both
+the slowest raw construction and a comparable cleanup cost.
+
+So the earlier "51x faster than standard practice" claim doesn't survive
+contact with what standard practice actually is at volume. Against a
+lazy, unaccelerated baseline, Shrink-Wrap's speedup looked dramatic; against
+the real thing, it's slower and lower-quality than a textbook
+nearest-neighbor-plus-candidate-list pipeline, and even the trivial
+Hilbert-curve sort — one line of bit-interleaving — beats it on raw
+construction speed by two orders of magnitude while landing in the same
+final quality range after cleanup. Shrink-Wrap remains the most
+interesting *construction rule* of everything tried in this project
+(Round 1-2), but "the standard, boring techniques, implemented properly"
+is still the thing to reach for at real high-volume scale.
+
 ## Outputs
 
 Outputs land in `output/`:
@@ -339,6 +397,9 @@ Outputs land in `output/`:
   `.csv`) — every family's winning variant plotted against the others.
 - `scaling.png` — Shrink-Wrap's O(n²) baseline vs. the grid-bounded O(n)
   variant, runtime (log-log) and quality cost vs. n up to 51,200 points.
+- `high_volume.png` / `high_volume.csv` — Shrink-Wrap (gridded) vs. actual
+  standard practice (Hilbert curve, grid-accelerated nearest-neighbor,
+  neighbor-list-restricted 2-opt) from n=1,000 to n=80,000.
 
 ## Running it
 
@@ -357,6 +418,11 @@ python families.py --outdir output
 # O(n^2) vs O(n) scaling test for Shrink-Wrap (takes a few minutes -- runs
 # the O(n^2) baseline up to n=6400)
 python scaling_test.py --outdir output
+
+# Shrink-Wrap (gridded) vs actual standard practice at high volume
+# (Hilbert curve, grid-accelerated NN, neighbor-list 2-opt), n up to 80,000
+# -- takes several minutes
+python high_volume_test.py --outdir output
 
 # literal brute force instead of Held-Karp, for small n
 python -c "
@@ -384,10 +450,13 @@ tsp_lab/
   geometry.py     point generation, tour length, centroid
   heuristics.py   all three heuristics + their improvement variants +
                   the clustering wrapper + brute force / Held-Karp /
-                  NN+2-opt / 2-opt / Or-opt baselines and local search
+                  NN+2-opt / 2-opt / Or-opt baselines and local search +
+                  standard-practice-at-scale baselines (Hilbert curve,
+                  grid-accelerated NN, neighbor-list 2-opt)
   benchmark.py    run a set of methods across n and seeds, save CSV
   visualize.py    static comparison plot, animations, benchmark plots
-demo.py           CLI entry point for the original three-heuristic demo
-families.py       CLI entry point for the improvement-idea testing round
-scaling_test.py   CLI entry point for the O(n^2) vs O(n) scaling test
+demo.py               CLI entry point for the original three-heuristic demo
+families.py           CLI entry point for the improvement-idea testing round
+scaling_test.py       CLI entry point for the O(n^2) vs O(n) scaling test
+high_volume_test.py   CLI entry point for the standard-practice-at-scale comparison
 ```
