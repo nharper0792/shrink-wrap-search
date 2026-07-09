@@ -48,6 +48,9 @@ METHOD_COLORS = {
     "nn_fast": "#5ccfa0",
     "nn_fast_2opt": "#0d7a52",
     "shrinkwrap_gridded_2opt": "#005900",
+
+    "wedge_radial": "#4fb3bf",
+    "wedge_radial_2opt": "#0e5a63",
 }
 METHOD_LABELS = {
     "exact": "Exact (Held–Karp)",
@@ -78,6 +81,9 @@ METHOD_LABELS = {
     "nn_fast": "Nearest-Neighbor (grid-accelerated)",
     "nn_fast_2opt": "Nearest-Neighbor (fast) + neighbor-list 2-opt",
     "shrinkwrap_gridded_2opt": "Shrink-Wrap (gridded) + neighbor-list 2-opt",
+
+    "wedge_radial": "Wedge & Radial Fragments",
+    "wedge_radial_2opt": "Wedge & Radial Fragments + 2-opt",
 }
 
 def _style_ax(ax, equal=True):
@@ -331,6 +337,34 @@ def plot_cluster_structure(points, save_path, threshold=None, title=None):
             ax.scatter(*pts.mean(axis=0), marker="x", s=55, color=INK, zorder=4)
 
     ax.set_title(title or f"{len(clusters)} clusters found (MST-gap threshold)",
+                fontsize=10.5, color=INK, loc="left")
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=160, bbox_inches="tight", facecolor=SURFACE)
+    plt.close(fig)
+    return save_path
+
+
+# ---------------------------------------------------------------------------
+# Wedge & Radial Fragments: fragments before merging
+# ---------------------------------------------------------------------------
+
+def plot_wedge_fragments(points, fragments, save_path, title=None):
+    fig, ax = plt.subplots(figsize=(6, 6), facecolor=SURFACE)
+    _style_ax(ax)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    cmap = plt.get_cmap("tab10")
+    for i, frag in enumerate(fragments):
+        color = cmap(i % 10)
+        pts = points[frag]
+        ax.plot(pts[:, 0], pts[:, 1], "-", color=color, linewidth=1.8, zorder=2)
+        ax.scatter(pts[:, 0], pts[:, 1], s=30, color=color, zorder=3,
+                  edgecolors=SURFACE, linewidths=0.6)
+        ax.scatter(*pts[0], marker="o", s=70, facecolors="none", edgecolors=color,
+                  linewidths=1.6, zorder=4)  # innermost (anchor) point of each fragment
+
+    ax.set_title(title or f"{len(fragments)} wedge fragments before merging (open circle = anchor)",
                 fontsize=10.5, color=INK, loc="left")
     fig.tight_layout()
     fig.savefig(save_path, dpi=160, bbox_inches="tight", facecolor=SURFACE)

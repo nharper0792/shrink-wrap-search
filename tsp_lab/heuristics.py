@@ -456,6 +456,91 @@ def orbit_recenter_tangent_tour(points, **kwargs):
 
 
 # ---------------------------------------------------------------------------
+# Approach 4: wedge & radial fragments
+#
+# Each cycle: take the centroid of whatever points are still unplaced, pick
+# the one closest to it, and capture every other unplaced point whose angle
+# from the centroid falls within a wedge around that direction. Sort the
+# captured points (including the anchor) by distance from the centroid to
+# form a short path fragment -- the anchor is always innermost, since by
+# construction nothing captured in its wedge can be closer to the centroid
+# than the point that was chosen *for* being the closest. Repeat against
+# whatever's left until every point belongs to some fragment, then stitch
+# the fragments into a single tour by repeatedly joining whichever two
+# fragment endpoints (from different fragments) are closest.
+#
+# wedge_half_angle_deg isn't pinned down by the description; it's exposed
+# as a parameter since nothing in the idea implies a specific width.
+# ---------------------------------------------------------------------------
+
+def _merge_fragments_nearest(points, fragments):
+    """Repeatedly join whichever two endpoints from different fragments are
+    closest, reversing a fragment as needed so the joined ends are
+    adjacent, until one fragment (path) remains."""
+    frags = [list(f) for f in fragments]
+    while len(frags) > 1:
+        best = None  # (dist, i, j, reverse_i, reverse_j)
+        for i in range(len(frags)):
+            ei = (frags[i][0], frags[i][-1])
+            for j in range(i + 1, len(frags)):
+                ej = (frags[j][0], frags[j][-1])
+                for a_end, rev_i in ((ei[0], True), (ei[1], False)):
+                    for b_end, rev_j in ((ej[0], False), (ej[1], True)):
+                        d = float(np.linalg.norm(points[a_end] - points[b_end]))
+                        if best is None or d < best[0]:
+                            best = (d, i, j, rev_i, rev_j)
+        _, i, j, rev_i, rev_j = best
+        fi = frags[i][::-1] if rev_i else frags[i]
+        fj = frags[j][::-1] if rev_j else frags[j]
+        merged = fi + fj
+        for idx in sorted((i, j), reverse=True):
+            frags.pop(idx)
+        frags.append(merged)
+    return frags[0]
+
+
+def wedge_radial_tour(points, wedge_half_angle_deg=15.0, return_trace=False):
+    n = len(points)
+    if n <= 2:
+        tour = list(range(n))
+        if return_trace:
+            return tour, {"fragments": [tour]}
+        return tour
+
+    half = math.radians(wedge_half_angle_deg)
+    remaining = set(range(n))
+    fragments = []
+
+    while remaining:
+        idx = list(remaining)
+        pts = points[idx]
+        centroid = pts.mean(axis=0)
+        d = np.linalg.norm(pts - centroid, axis=1)
+        anchor = idx[int(np.argmin(d))]
+        anchor_angle = math.atan2(points[anchor][1] - centroid[1], points[anchor][0] - centroid[0])
+
+        vecs = pts - centroid
+        angles = np.arctan2(vecs[:, 1], vecs[:, 0])
+        angular_diff = np.abs((angles - anchor_angle + math.pi) % (2 * math.pi) - math.pi)
+        captured_mask = angular_diff <= half
+        captured = [i for i, m in zip(idx, captured_mask) if m]
+
+        captured_d = np.linalg.norm(points[captured] - centroid, axis=1)
+        fragment = [captured[i] for i in np.argsort(captured_d)]
+        fragments.append(fragment)
+        remaining.difference_update(captured)
+
+    tour = _merge_fragments_nearest(points, fragments)
+    if return_trace:
+        return tour, {"fragments": fragments}
+    return tour
+
+
+def wedge_radial_2opt_tour(points, wedge_half_angle_deg=15.0, k=8):
+    return neighbor_list_2opt(points, wedge_radial_tour(points, wedge_half_angle_deg=wedge_half_angle_deg), k=k)
+
+
+# ---------------------------------------------------------------------------
 # Baselines
 # ---------------------------------------------------------------------------
 
