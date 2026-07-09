@@ -548,6 +548,184 @@ def nearest_neighbor_2opt_tour(points, start=0):
     return two_opt(points, nearest_neighbor_tour(points, start=start))
 
 
+# ---------------------------------------------------------------------------
+# Standard practice at scale
+#
+# nearest_neighbor_2opt_tour is the standard reference used throughout this
+# project, but it's not what "standard practice" actually means once n gets
+# into the thousands: naive nearest-neighbor is O(n^2) (a full linear scan
+# of remaining points per step) and 2-opt is O(n^2) per pass -- both become
+# impractical long before shrink_wrap_gridded_tour does. Real large-scale
+# TSP practice uses spatial structures to avoid both O(n^2)s:
+#
+#   - a Hilbert-curve sort: map each point to its position along a
+#     space-filling curve and sort by that index. O(n log n), no
+#     iteration at all, and the textbook fast heuristic for huge point
+#     sets (used in everything from PCB drilling to VLSI routing).
+#   - nearest-neighbor construction sped up with the same spatial grid
+#     used by shrink_wrap_gridded_tour, so each step is O(1) average
+#     instead of an O(n) scan.
+#   - 2-opt restricted to a k-nearest-neighbor candidate list per point
+#     (built once via the grid) instead of checking all O(n) other edges
+#     -- this candidate-list restriction is the actual mechanism real
+#     solvers (e.g. Lin-Kernighan-style) use to make local search scale;
+#     "check every pair" was never standard practice at volume.
+# ---------------------------------------------------------------------------
+
+def _hilbert_d(x, y, order):
+    rx = ry = 0
+    d = 0
+    s = 1 << (order - 1)
+    while s > 0:
+        rx = 1 if (x & s) else 0
+        ry = 1 if (y & s) else 0
+        d += s * s * ((3 * rx) ^ ry)
+        if ry == 0:
+            if rx == 1:
+                x = s - 1 - x
+                y = s - 1 - y
+            x, y = y, x
+        s >>= 1
+    return d
+
+
+def hilbert_curve_tour(points, order=16):
+    """Sort points by their position along a Hilbert curve. O(n log n),
+    the standard fast construction heuristic for large point sets."""
+    n = len(points)
+    if n <= 1:
+        return list(range(n))
+    mins = points.min(axis=0)
+    maxs = points.max(axis=0)
+    span = np.maximum(maxs - mins, 1e-9)
+    scale = (1 << order) - 1
+    ix = np.clip(((points[:, 0] - mins[0]) / span[0] * scale).astype(np.int64), 0, scale)
+    iy = np.clip(((points[:, 1] - mins[1]) / span[1] * scale).astype(np.int64), 0, scale)
+    idx = np.array([_hilbert_d(int(x), int(y), order) for x, y in zip(ix, iy)])
+    return np.argsort(idx).tolist()
+
+
+def nearest_neighbor_fast_tour(points, start=0, cell_capacity_hint=2.0):
+    """Same greedy rule as nearest_neighbor_tour, but each step finds the
+    nearest unvisited point via the spatial grid (expanding ring search,
+    same idea as shrink_wrap_gridded_tour's candidate search) instead of
+    scanning every remaining point. O(n) average instead of O(n^2)."""
+    n = len(points)
+    if n <= 1:
+        return list(range(n))
+    cell_of, n_cells = _build_grid(points, cell_capacity_hint)
+    grid = {}
+    for i in range(n):
+        grid.setdefault(cell_of(points[i]), []).append(i)
+
+    def remove_from_grid(i):
+        grid[cell_of(points[i])].remove(i)
+
+    tour = [start]
+    remove_from_grid(start)
+    cur = start
+    for _ in range(n - 1):
+        px, py = cell_of(points[cur])
+        radius, best, best_d, settled_at = 1, None, math.inf, None
+        while True:
+            found = [j for dx in range(-radius, radius + 1) for dy in range(-radius, radius + 1)
+                     for j in grid.get((px + dx, py + dy), [])]
+            if found:
+                d = np.linalg.norm(points[found] - points[cur], axis=1)
+                i_min = int(np.argmin(d))
+                if d[i_min] < best_d:
+                    best_d, best = float(d[i_min]), found[i_min]
+                if settled_at is None:
+                    settled_at = radius + 1  # one extra ring, in case a closer point sits just outside
+                elif radius >= settled_at:
+                    break
+            elif settled_at is not None and radius >= settled_at:
+                break
+            radius += 1
+            if radius > 2 * n_cells + 2:
+                break
+        tour.append(best)
+        remove_from_grid(best)
+        cur = best
+    return tour
+
+
+def _build_neighbor_lists(points, k=8, cell_capacity_hint=2.0):
+    n = len(points)
+    cell_of, n_cells = _build_grid(points, cell_capacity_hint)
+    grid = {}
+    for i in range(n):
+        grid.setdefault(cell_of(points[i]), []).append(i)
+
+    neighbor_lists = []
+    for i in range(n):
+        px, py = cell_of(points[i])
+        radius, found = 0, []
+        while len(found) < k + 1 and radius <= n_cells:
+            found = [j for dx in range(-radius, radius + 1) for dy in range(-radius, radius + 1)
+                     for j in grid.get((px + dx, py + dy), [])]
+            radius += 1
+        found = [j for j in found if j != i]
+        if len(found) > k:
+            d = np.linalg.norm(points[found] - points[i], axis=1)
+            order = np.argsort(d)[:k]
+            found = [found[o] for o in order]
+        neighbor_lists.append(found)
+    return neighbor_lists
+
+
+def neighbor_list_2opt(points, tour, k=8, max_passes=30):
+    """2-opt restricted to each point's k-nearest-neighbor candidate list,
+    instead of checking all O(n) other edges -- O(passes * n * k) instead
+    of O(passes * n^2). The candidate-list mechanism real large-scale
+    solvers use."""
+    n = len(tour)
+    if n < 4:
+        return list(tour)
+    neighbor_lists = _build_neighbor_lists(points, k=k)
+    best = list(tour)
+    pos = [0] * n
+    for idx, city in enumerate(best):
+        pos[city] = idx
+
+    def dist(a, b):
+        return float(np.linalg.norm(points[a] - points[b]))
+
+    improved = True
+    passes = 0
+    while improved and passes < max_passes:
+        improved = False
+        passes += 1
+        for i in range(n - 1):
+            a, b = best[i], best[i + 1]
+            dab = dist(a, b)
+            for c in neighbor_lists[a]:
+                j = pos[c]
+                if j <= i + 1 or j >= n or (i == 0 and j == n - 1):
+                    continue
+                cc, d = best[j], best[(j + 1) % n]
+                if dab + dist(cc, d) > dist(a, cc) + dist(b, d) + 1e-9:
+                    best[i + 1:j + 1] = best[i + 1:j + 1][::-1]
+                    for idx2 in range(i + 1, j + 1):
+                        pos[best[idx2]] = idx2
+                    improved = True
+                    b = best[i + 1]
+                    dab = dist(a, b)
+    return best
+
+
+def nearest_neighbor_fast_2opt_tour(points, k=8):
+    return neighbor_list_2opt(points, nearest_neighbor_fast_tour(points), k=k)
+
+
+def shrink_wrap_gridded_2opt_tour(points, k=8):
+    return neighbor_list_2opt(points, shrink_wrap_gridded_tour(points), k=k)
+
+
+def hilbert_curve_2opt_tour(points, k=8):
+    return neighbor_list_2opt(points, hilbert_curve_tour(points), k=k)
+
+
 def brute_force_tour(points, max_n=10, force=False):
     n = len(points)
     if n > max_n and not force:

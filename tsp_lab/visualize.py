@@ -41,6 +41,13 @@ METHOD_COLORS = {
 
     "orbit_clustered_v2": "#c14c7c",
     "shrinkwrap_clustered": "#7a1f47",
+
+    # standard-practice-at-scale baselines
+    "hilbert": "#eb6834",             # categorical slot 8 (orange)
+    "hilbert_2opt": "#a8431a",
+    "nn_fast": "#5ccfa0",
+    "nn_fast_2opt": "#0d7a52",
+    "shrinkwrap_gridded_2opt": "#005900",
 }
 METHOD_LABELS = {
     "exact": "Exact (Held–Karp)",
@@ -65,6 +72,12 @@ METHOD_LABELS = {
 
     "orbit_clustered_v2": "Orbit + clustering (endpoint-opt)",
     "shrinkwrap_clustered": "Shrink-Wrap + clustering (endpoint-opt)",
+
+    "hilbert": "Hilbert curve sort",
+    "hilbert_2opt": "Hilbert curve + neighbor-list 2-opt",
+    "nn_fast": "Nearest-Neighbor (grid-accelerated)",
+    "nn_fast_2opt": "Nearest-Neighbor (fast) + neighbor-list 2-opt",
+    "shrinkwrap_gridded_2opt": "Shrink-Wrap (gridded) + neighbor-list 2-opt",
 }
 
 def _style_ax(ax, equal=True):
