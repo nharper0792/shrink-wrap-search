@@ -499,7 +499,7 @@ def _merge_fragments_nearest(points, fragments):
     return frags[0]
 
 
-def wedge_radial_tour(points, wedge_half_angle_deg=15.0, return_trace=False):
+def wedge_radial_tour(points, wedge_half_angle_deg=15.0, recenter=True, return_trace=False):
     n = len(points)
     if n <= 2:
         tour = list(range(n))
@@ -510,11 +510,12 @@ def wedge_radial_tour(points, wedge_half_angle_deg=15.0, return_trace=False):
     half = math.radians(wedge_half_angle_deg)
     remaining = set(range(n))
     fragments = []
+    fixed_centroid = points.mean(axis=0) if not recenter else None
 
     while remaining:
         idx = list(remaining)
         pts = points[idx]
-        centroid = pts.mean(axis=0)
+        centroid = fixed_centroid if not recenter else pts.mean(axis=0)
         d = np.linalg.norm(pts - centroid, axis=1)
         anchor = idx[int(np.argmin(d))]
         anchor_angle = math.atan2(points[anchor][1] - centroid[1], points[anchor][0] - centroid[0])
@@ -562,7 +563,7 @@ def wedge_radial_2opt_tour(points, wedge_half_angle_deg=15.0, k=8):
 # side to fan out into -- everything captured is already in front of it.
 # ---------------------------------------------------------------------------
 
-def wedge_tip_tour(points, wedge_half_angle_deg=45.0, return_trace=False):
+def wedge_tip_tour(points, wedge_half_angle_deg=45.0, recenter=True, return_trace=False):
     n = len(points)
     if n <= 2:
         tour = list(range(n))
@@ -573,11 +574,12 @@ def wedge_tip_tour(points, wedge_half_angle_deg=45.0, return_trace=False):
     half = math.radians(wedge_half_angle_deg)
     remaining = set(range(n))
     fragments = []
+    fixed_centroid = points.mean(axis=0) if not recenter else None
 
     while remaining:
         idx = list(remaining)
         pts = points[idx]
-        centroid = pts.mean(axis=0)
+        centroid = fixed_centroid if not recenter else pts.mean(axis=0)
         d_centroid = np.linalg.norm(pts - centroid, axis=1)
         anchor = idx[int(np.argmin(d_centroid))]
         anchor_pos = points[anchor]
