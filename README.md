@@ -231,6 +231,53 @@ already only ~10% off best-known at moderate n — see the table above —
 so the gridded version's absolute quality is still reasonable, just not
 as tight.)
 
+## Round 4: does the orbit radius matter?
+
+Orbit & Recenter's walker starts each leg on a circle of some radius
+around the current center. Does changing that radius — bounding (max
+distance, the default), standard deviation, mean distance, midpoint of the
+distance range, or arbitrary constants — change the resulting tour?
+
+For the no-recenter version (one fixed circle, orbited the whole way
+through), no: proven and verified (30/30 tests, 5 radii × 6 test
+instances, every one producing the exact same tour length as
+`angular_sort_tour`). The reason is a property of circles, not of this
+algorithm specifically — the point on a circle closest to any target is
+always along the ray from the circle's center through that target,
+regardless of the circle's radius, so only the *center* determines
+selection order.
+
+For Orbit & Recenter (recentering after every pick, or every k picks), the
+same turns out to be true, but the reason is different and was only found
+by tracing the code: after every selection, the walker's position gets
+overwritten with the true coordinates of the point it just picked — so the
+synthetic, radius-dependent position computed during the *previous*
+recentering step is never actually read by anything that affects a
+decision. It only ever appears in the animation trace.
+
+Testing this surfaced a real bug, though: one guard in the recentering
+logic checked `new_R > 1e-12` to decide whether to compute a fresh bearing
+or reuse the old one — meant to catch "the remaining points have collapsed
+to a single location," but actually keyed off whichever radius metric was
+in use. Standard deviation is 0 for *any* two points relative to their own
+midpoint (they're always equidistant from it), so whenever exactly two
+points remained, the std-dev radius setting would silently reuse a stale
+bearing instead of computing the correct one — a genuine behavior
+difference between radius choices, but a numerical artifact, not a
+geometric one. Fixed by checking the actual degenerate condition (walker
+position ≈ new center) instead of the radius value; verified clean
+afterward (0/840 runs differed across 14 seeds × 5 recenter-frequencies ×
+2 data types × 6 radius functions, once the guard checks the right thing).
+Confirmed the fix doesn't change any previously-reported result for the
+default (bounding-radius) setting on ordinary data — it only fires in the
+degenerate two-point case.
+
+`orbit_recenter_tour` now takes a `radius_fn(points, center)` parameter for
+anyone who wants to keep experimenting with it, though the finding is that
+it's a free parameter with no effect on output — the real levers are the
+center (recentering) and the recenter frequency, both already covered in
+Round 2.
+
 ## Outputs
 
 Outputs land in `output/`:

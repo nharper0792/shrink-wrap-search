@@ -294,15 +294,35 @@ def _select_min_offset_noncross(idx_list, offsets, points, cur_pos, tour):
     return idx_list[int(order[0])]
 
 
+def _radius_bounding(pts, center):
+    return float(np.linalg.norm(pts - center, axis=1).max())
+
+
+def _radius_std(pts, center):
+    return float(np.linalg.norm(pts - center, axis=1).std())
+
+
+def _radius_mean(pts, center):
+    return float(np.linalg.norm(pts - center, axis=1).mean())
+
+
+def _radius_midrange(pts, center):
+    d = np.linalg.norm(pts - center, axis=1)
+    return float((d.min() + d.max()) / 2)
+
+
 def orbit_recenter_tour(points, direction=-1, start_angle=0.0, recenter_every=1,
-                        select_fn=None, return_trace=False):
+                        select_fn=None, radius_fn=None, return_trace=False):
     """recenter_every=1 recalculates the circle after every point (the
     original design); larger values orbit the same circle for several picks
     before recentering. select_fn(idx_list, offsets, points, cur_pos, tour)
     picks which candidate to select among the "kept" (forward-half) ones --
     defaults to smallest offset; pass _select_min_offset_noncross to add a
-    self-intersection check."""
+    self-intersection check. radius_fn(points, center) computes the circle's
+    radius (default: bounding/max distance) -- see the module docstring note
+    below on why this turns out not to matter."""
     select_fn = select_fn or _select_min_offset
+    radius_fn = radius_fn or _radius_bounding
     n = len(points)
     if n <= 2:
         tour = list(range(n))
@@ -310,7 +330,7 @@ def orbit_recenter_tour(points, direction=-1, start_angle=0.0, recenter_every=1,
         return (tour, trace) if return_trace else tour
 
     center0 = points.mean(axis=0)
-    R0 = float(np.linalg.norm(points - center0, axis=1).max())
+    R0 = radius_fn(points, center0)
     start_pos = center0 + R0 * np.array([math.cos(start_angle), math.sin(start_angle)])
 
     remaining = set(range(n))
@@ -329,9 +349,17 @@ def orbit_recenter_tour(points, direction=-1, start_angle=0.0, recenter_every=1,
             rem_idx = list(remaining)
             rem_pts = points[rem_idx]
             new_center = rem_pts.mean(axis=0)
-            new_R = float(np.linalg.norm(rem_pts - new_center, axis=1).max())
+            new_R = radius_fn(rem_pts, new_center)
+            # NB: the fallback condition below is about whether cur_pos and
+            # new_center coincide (an undefined angle), not about new_R --
+            # checking new_R here was a latent bug: a radius metric that can
+            # be ~0 even when cur_pos and new_center are far apart (e.g.
+            # std-dev of exactly 2 equidistant points is always 0) would
+            # wrongly skip updating the bearing, making the algorithm
+            # depend on *which* radius_fn was passed for reasons that have
+            # nothing to do with geometry. See README "Round 4".
             theta_snap = (math.atan2(cur_pos[1] - new_center[1], cur_pos[0] - new_center[0])
-                          if new_R > 1e-12 else cur_theta)
+                          if np.linalg.norm(cur_pos - new_center) > 1e-12 else cur_theta)
             cur_pos = new_center + new_R * np.array([math.cos(theta_snap), math.sin(theta_snap)])
             cur_center, cur_radius, cur_theta = new_center, new_R, theta_snap
             trace.append({"type": "recalc", "center": cur_center.copy(), "radius": cur_radius,
