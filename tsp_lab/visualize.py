@@ -6,7 +6,7 @@ import matplotlib.patches as patches
 import numpy as np
 from matplotlib.animation import FuncAnimation, PillowWriter
 
-from .heuristics import bounding_circle
+from .heuristics import bounding_circle, cluster_by_threshold
 
 # --- theme (dataviz skill palette: fixed categorical order, light surface) ---
 SURFACE = "#fcfcfb"
@@ -17,20 +17,78 @@ GRID = "#e1e0d9"
 AXIS = "#c3c2b7"
 
 METHOD_COLORS = {
-    "exact": "#2a78d6",       # categorical slot 1 (blue)
-    "nn2opt": "#1baf7a",      # categorical slot 2 (aqua)
-    "angular": "#eda100",     # categorical slot 3 (yellow)
-    "shrinkwrap": "#4a3aa7",  # categorical slot 5 (violet)
+    "exact": "#2a78d6",         # categorical slot 1 (blue)
+    "nn2opt": "#1baf7a",        # categorical slot 2 (aqua)
+    "angular": "#eda100",       # categorical slot 3 (yellow)
+    "shrinkwrap": "#4a3aa7",    # categorical slot 5 (violet)
+    "orbit": "#e34948",         # categorical slot 6 (red)
+    "orbit_clustered": "#e87ba4",  # categorical slot 7 (magenta)
+
+    # family variants -- shades of the parent method's hue, so a family
+    # chart reads as "one hue = one family, lightness = which variant"
+    "angular_oropt": "#b97600",
+
+    "shrinkwrap_cheapest": "#8172cf",
+    "shrinkwrap_2opt": "#2d2470",
+    "shrinkwrap_cheapest_2opt": "#c3bbe8",
+    "shrinkwrap_gridded": "#008300",   # categorical slot 4 (green) -- unused elsewhere, avoids clashing with nn2opt's aqua
+
+    "orbit_every3": "#f2905c",
+    "orbit_every10": "#a52a2a",
+    "orbit_noncross": "#7a1f1f",
+    "orbit_2opt": "#7d0f0f",
+    "orbit_tangent": "#c9645f",
+
+    "orbit_clustered_v2": "#c14c7c",
+    "shrinkwrap_clustered": "#7a1f47",
+
+    # standard-practice-at-scale baselines
+    "hilbert": "#eb6834",             # categorical slot 8 (orange)
+    "hilbert_2opt": "#a8431a",
+    "nn_fast": "#5ccfa0",
+    "nn_fast_2opt": "#0d7a52",
+    "shrinkwrap_gridded_2opt": "#005900",
+
+    "wedge_radial": "#4fb3bf",
+    "wedge_radial_2opt": "#0e5a63",
+    "wedge_tip": "#c9a86a",
+    "wedge_tip_2opt": "#7a5f2e",
 }
 METHOD_LABELS = {
     "exact": "Exact (Held–Karp)",
     "nn2opt": "Nearest-Neighbor + 2-opt",
     "angular": "Angular Sort (wedge)",
     "shrinkwrap": "Shrink-Wrap (vacuum bag)",
-}
-# ordinal-safe steps only (skip the near-surface steps so revealed points stay legible)
-SEQUENTIAL_BLUES = ["#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#104281", "#0d366b"]
+    "orbit": "Orbit & Recenter",
+    "orbit_clustered": "Orbit & Recenter + clustering",
 
+    "angular_oropt": "Angular Sort + Or-opt",
+
+    "shrinkwrap_cheapest": "Shrink-Wrap (cheapest-insertion)",
+    "shrinkwrap_2opt": "Shrink-Wrap + 2-opt",
+    "shrinkwrap_cheapest_2opt": "Shrink-Wrap (cheapest) + 2-opt",
+    "shrinkwrap_gridded": "Shrink-Wrap (grid-bounded, O(n))",
+
+    "orbit_every3": "Orbit, recenter every 3",
+    "orbit_every10": "Orbit, recenter every 10",
+    "orbit_noncross": "Orbit + crossing-avoidance",
+    "orbit_2opt": "Orbit + 2-opt",
+    "orbit_tangent": "Orbit + tangent-line marching",
+
+    "orbit_clustered_v2": "Orbit + clustering (endpoint-opt)",
+    "shrinkwrap_clustered": "Shrink-Wrap + clustering (endpoint-opt)",
+
+    "hilbert": "Hilbert curve sort",
+    "hilbert_2opt": "Hilbert curve + neighbor-list 2-opt",
+    "nn_fast": "Nearest-Neighbor (grid-accelerated)",
+    "nn_fast_2opt": "Nearest-Neighbor (fast) + neighbor-list 2-opt",
+    "shrinkwrap_gridded_2opt": "Shrink-Wrap (gridded) + neighbor-list 2-opt",
+
+    "wedge_radial": "Wedge & Radial Fragments",
+    "wedge_radial_2opt": "Wedge & Radial Fragments + 2-opt",
+    "wedge_tip": "Wedge & Radial Fragments (point-apex)",
+    "wedge_tip_2opt": "Wedge & Radial Fragments (point-apex) + 2-opt",
+}
 
 def _style_ax(ax, equal=True):
     ax.set_facecolor(SURFACE)
@@ -139,27 +197,15 @@ def animate_angular_sweep(points, save_path, clockwise=True, fps=20, frames=180)
 
 
 # ---------------------------------------------------------------------------
-# Approach 2 animation: shrink-wrap peeling by recursion depth
+# Approach 2 animation: circle shrinks uniformly, contacting points in order
+# of decreasing distance from the centroid; each new point is spliced into
+# the loop at the edge where it forms the shallowest triangle.
 # ---------------------------------------------------------------------------
 
-def _depth_per_point(trace, n):
-    depth = np.zeros(n, dtype=int)
-    for entry in trace:
-        for i in entry["hull"]:
-            depth[i] = entry["depth"]
-    return depth
-
-
-def animate_shrink_wrap(points, tour, trace, save_path, fps=2, hold_frames=1):
+def animate_shrink_wrap(points, tour, trace, save_path, fps=1.5, hold_frames=1):
     n = len(points)
     c, r = bounding_circle(points)
-    depth = _depth_per_point(trace, n)
-    max_depth = max(1, int(depth.max()))
-    ramp = SEQUENTIAL_BLUES
-
-    def color_for_depth(d):
-        idx = int(round((d / max_depth) * (len(ramp) - 1)))
-        return ramp[idx]
+    dists = np.linalg.norm(points - c, axis=1)
 
     fig, ax = plt.subplots(figsize=(6, 6), facecolor=SURFACE)
     _style_ax(ax)
@@ -168,36 +214,46 @@ def animate_shrink_wrap(points, tour, trace, save_path, fps=2, hold_frames=1):
     ax.set_ylim(c[1] - r - pad, c[1] + r + pad)
     ax.set_xticks([])
     ax.set_yticks([])
-    ax.set_title("Shrink-Wrap: outer points stick first, membrane sinks into each pocket", fontsize=10.5, color=INK)
+    ax.set_title("Shrink-Wrap: circle contacts points far-to-near, each snaps in at its\nshallowest-triangle edge",
+                 fontsize=10.5, color=INK)
 
     shrink_circle = patches.Circle(c, r * 1.08, fill=False, linestyle="--", linewidth=1.3,
                                     edgecolor=INK_MUTED, zorder=1)
     ax.add_patch(shrink_circle)
 
-    scat = ax.scatter(points[:, 0], points[:, 1], s=26, color=INK_MUTED, zorder=3,
+    (tri_line,) = ax.plot([], [], color=METHOD_COLORS["shrinkwrap"], linewidth=1.1,
+                          linestyle=":", alpha=0.7, zorder=3)
+    scat = ax.scatter(points[:, 0], points[:, 1], s=26, color=INK_MUTED, zorder=4,
                        edgecolors=SURFACE, linewidths=0.8)
-    (path_line,) = ax.plot([], [], color=METHOD_COLORS["shrinkwrap"], linewidth=2.2, zorder=4)
+    (path_line,) = ax.plot([], [], color=METHOD_COLORS["shrinkwrap"], linewidth=2.2, zorder=5)
 
-    n_frames = n * hold_frames
+    n_frames = len(trace) * hold_frames
 
     def update(frame):
-        k = min(n, frame // hold_frames + 1)
-        revealed = tour[:k]
-        pts = points[revealed]
-        path_line.set_data(pts[:, 0], pts[:, 1])
-        if k == n:
-            closed = points[tour + [tour[0]]]
-            path_line.set_data(closed[:, 0], closed[:, 1])
+        idx = min(len(trace) - 1, frame // hold_frames)
+        entry = trace[idx]
+        path = entry["path"]
 
-        colors = [
-            color_for_depth(depth[i]) if i in revealed else INK_MUTED
-            for i in range(n)
-        ]
+        closed = points[path + [path[0]]]
+        path_line.set_data(closed[:, 0], closed[:, 1])
+
+        revealed_set = set(path)
+        sizes = [90 if i == entry["inserted"] else 26 for i in range(n)]
+        colors = [METHOD_COLORS["shrinkwrap"] if i in revealed_set else INK_MUTED for i in range(n)]
         scat.set_color(colors)
+        scat.set_sizes(sizes)
 
-        cur_depth = max((depth[i] for i in revealed), default=0)
-        shrink_circle.set_radius(r * 1.08 * (1 - 0.55 * cur_depth / max_depth))
-        return scat, path_line, shrink_circle
+        if entry["edge"] is not None:
+            a, b = entry["edge"]
+            tri = points[[a, entry["inserted"], b, a]]
+            tri_line.set_data(tri[:, 0], tri[:, 1])
+            radius = dists[entry["inserted"]]
+        else:
+            tri_line.set_data([], [])
+            radius = r
+        shrink_circle.set_radius(radius * 1.08)
+
+        return scat, path_line, shrink_circle, tri_line
 
     anim = FuncAnimation(fig, update, frames=n_frames, interval=1000 / fps, blit=True)
     anim.save(save_path, writer=PillowWriter(fps=fps))
@@ -206,10 +262,179 @@ def animate_shrink_wrap(points, tour, trace, save_path, fps=2, hold_frames=1):
 
 
 # ---------------------------------------------------------------------------
+# Approach 3 animation: circle orbits and picks off the next point in its
+# forward half; after every pick the circle recenters on whatever's left.
+# ---------------------------------------------------------------------------
+
+def animate_orbit_recenter(points, tour, trace, save_path, fps=2):
+    n = len(points)
+    c0, r0 = bounding_circle(points)
+    pad = r0 * 0.25
+
+    fig, ax = plt.subplots(figsize=(6, 6), facecolor=SURFACE)
+    _style_ax(ax)
+    ax.set_xlim(c0[0] - r0 - pad, c0[0] + r0 + pad)
+    ax.set_ylim(c0[1] - r0 - pad, c0[1] + r0 + pad)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title("Orbit & Recenter: circle picks off the next forward point, then\nrecenters on what's left",
+                 fontsize=10.5, color=INK)
+
+    circle = patches.Circle(c0, r0, fill=False, linestyle="--", linewidth=1.3,
+                            edgecolor=INK_MUTED, zorder=1)
+    ax.add_patch(circle)
+    center_mark = ax.scatter(*c0, marker="+", s=60, color=INK_SECONDARY, zorder=2)
+
+    scat = ax.scatter(points[:, 0], points[:, 1], s=26, color=INK_MUTED, zorder=4,
+                       edgecolors=SURFACE, linewidths=0.8)
+    (path_line,) = ax.plot([], [], color=METHOD_COLORS["orbit"], linewidth=2.2, zorder=5)
+    (walker,) = ax.plot([], [], marker="o", markersize=7, color=METHOD_COLORS["orbit"],
+                        markerfacecolor="none", markeredgewidth=2, zorder=6)
+
+    def update(frame):
+        entry = trace[frame]
+        circle.set_center(entry["center"])
+        circle.set_radius(entry["radius"])
+        center_mark.set_offsets([entry["center"]])
+        walker.set_data([entry["cur_pos"][0]], [entry["cur_pos"][1]])
+
+        path = entry["path"]
+        if path:
+            pts = points[path]
+            path_line.set_data(pts[:, 0], pts[:, 1])
+        else:
+            path_line.set_data([], [])
+        if entry is trace[-1] and len(path) == n:
+            closed = points[path + [path[0]]]
+            path_line.set_data(closed[:, 0], closed[:, 1])
+
+        placed = set(path)
+        colors = [METHOD_COLORS["orbit"] if i in placed else INK_MUTED for i in range(n)]
+        scat.set_color(colors)
+
+        return circle, center_mark, scat, path_line, walker
+
+    anim = FuncAnimation(fig, update, frames=len(trace), interval=1000 / fps, blit=True)
+    anim.save(save_path, writer=PillowWriter(fps=fps))
+    plt.close(fig)
+    return save_path
+
+
+# ---------------------------------------------------------------------------
+# Illustration of the recursive-clustering wrapper's cluster assignment
+# ---------------------------------------------------------------------------
+
+def plot_cluster_structure(points, save_path, threshold=None, title=None):
+    clusters = cluster_by_threshold(points, threshold)
+    fig, ax = plt.subplots(figsize=(6, 6), facecolor=SURFACE)
+    _style_ax(ax)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    cmap = plt.get_cmap("tab10")
+    for i, idx in enumerate(clusters):
+        color = cmap(i % 10)
+        pts = points[idx]
+        ax.scatter(pts[:, 0], pts[:, 1], s=34, color=color, zorder=3,
+                  edgecolors=SURFACE, linewidths=0.6)
+        if len(idx) > 1:
+            ax.scatter(*pts.mean(axis=0), marker="x", s=55, color=INK, zorder=4)
+
+    ax.set_title(title or f"{len(clusters)} clusters found (MST-gap threshold)",
+                fontsize=10.5, color=INK, loc="left")
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=160, bbox_inches="tight", facecolor=SURFACE)
+    plt.close(fig)
+    return save_path
+
+
+# ---------------------------------------------------------------------------
+# Wedge & Radial Fragments: fragments before merging
+# ---------------------------------------------------------------------------
+
+def plot_wedge_fragments(points, fragments, save_path, title=None):
+    fig, ax = plt.subplots(figsize=(6, 6), facecolor=SURFACE)
+    _style_ax(ax)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    cmap = plt.get_cmap("tab10")
+    for i, frag in enumerate(fragments):
+        color = cmap(i % 10)
+        pts = points[frag]
+        ax.plot(pts[:, 0], pts[:, 1], "-", color=color, linewidth=1.8, zorder=2)
+        ax.scatter(pts[:, 0], pts[:, 1], s=30, color=color, zorder=3,
+                  edgecolors=SURFACE, linewidths=0.6)
+        ax.scatter(*pts[0], marker="o", s=70, facecolors="none", edgecolors=color,
+                  linewidths=1.6, zorder=4)  # innermost (anchor) point of each fragment
+
+    ax.set_title(title or f"{len(fragments)} wedge fragments before merging (open circle = anchor)",
+                fontsize=10.5, color=INK, loc="left")
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=160, bbox_inches="tight", facecolor=SURFACE)
+    plt.close(fig)
+    return save_path
+
+
+# ---------------------------------------------------------------------------
+# Shrink-Wrap O(n^2) vs O(n) scaling
+# ---------------------------------------------------------------------------
+
+def plot_scaling(measured, gridded_extra, save_path, quadratic_fit_from=None):
+    """measured: list of dicts with n, time_baseline, time_gridded, ratio_to_baseline
+    (both methods actually run). gridded_extra: list of dicts with n, time_gridded
+    only, for sizes where the O(n^2) baseline wasn't run. quadratic_fit_from: an
+    (n, time) point to anchor a dashed O(n^2) extrapolation curve through the
+    gridded_extra range, showing how long the baseline *would* take."""
+    ns_m = [r["n"] for r in measured]
+    t_base = [r["time_baseline"] for r in measured]
+    t_grid = [r["time_gridded"] for r in measured]
+    ratio = [r["ratio_to_baseline"] for r in measured]
+
+    ns_all_grid = ns_m + [r["n"] for r in gridded_extra]
+    t_all_grid = t_grid + [r["time_gridded"] for r in gridded_extra]
+
+    fig, (ax_t, ax_q) = plt.subplots(1, 2, figsize=(11, 4.6), facecolor=SURFACE)
+    for ax in (ax_t, ax_q):
+        _style_ax(ax, equal=False)
+        ax.grid(True, color=GRID, linewidth=0.8, zorder=0)
+
+    ax_t.plot(ns_m, t_base, "-o", color=METHOD_COLORS["shrinkwrap"],
+             label=METHOD_LABELS["shrinkwrap"] + "  ·  O(n²)", markersize=4, linewidth=2, zorder=3)
+    if quadratic_fit_from:
+        n0, t0 = quadratic_fit_from
+        ns_fit = [n for n in ns_all_grid if n >= n0]
+        t_fit = [t0 * (n / n0) ** 2 for n in ns_fit]
+        ax_t.plot(ns_fit, t_fit, "--", color=METHOD_COLORS["shrinkwrap"], alpha=0.45,
+                 linewidth=1.6, zorder=2, label="O(n²) extrapolated")
+    ax_t.plot(ns_all_grid, t_all_grid, "-o", color=METHOD_COLORS["shrinkwrap_gridded"],
+             label=METHOD_LABELS["shrinkwrap_gridded"] + "  ·  O(n)", markersize=4, linewidth=2, zorder=3)
+    ax_t.set_xscale("log")
+    ax_t.set_yscale("log")
+    ax_t.set_xlabel("points (n), log scale", color=INK_SECONDARY, fontsize=9)
+    ax_t.set_ylabel("wall-clock time (s), log scale", color=INK_SECONDARY, fontsize=9)
+    ax_t.set_title("Runtime: O(n²) vs O(n)", fontsize=10.5, color=INK, loc="left")
+    ax_t.legend(fontsize=8.5, frameon=False, loc="upper left")
+
+    ax_q.plot(ns_m, ratio, "-o", color=METHOD_COLORS["shrinkwrap_gridded"], markersize=4, linewidth=2, zorder=3)
+    ax_q.axhline(1.0, color=INK_MUTED, linewidth=1, linestyle="--", zorder=1)
+    ax_q.set_xscale("log")
+    ax_q.set_xlabel("points (n), log scale", color=INK_SECONDARY, fontsize=9)
+    ax_q.set_ylabel("gridded length ÷ O(n²) baseline length", color=INK_SECONDARY, fontsize=9)
+    ax_q.set_title("Quality cost of capping the search", fontsize=10.5, color=INK, loc="left")
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=160, bbox_inches="tight", facecolor=SURFACE)
+    plt.close(fig)
+    return save_path
+
+
+# ---------------------------------------------------------------------------
 # Benchmark plots
 # ---------------------------------------------------------------------------
 
-def plot_benchmark(records, save_path, methods=("exact", "nn2opt", "angular", "shrinkwrap")):
+def plot_benchmark(records, save_path,
+                   methods=("exact", "nn2opt", "angular", "shrinkwrap", "orbit", "orbit_clustered")):
     ns = sorted(set(r["n"] for r in records))
     fig, (ax_q, ax_t) = plt.subplots(1, 2, figsize=(11, 4.6), facecolor=SURFACE)
     for ax in (ax_q, ax_t):
