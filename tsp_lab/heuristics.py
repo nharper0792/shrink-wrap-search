@@ -521,12 +521,18 @@ def wedge_radial_tour(points, wedge_half_angle_deg=15.0, return_trace=False):
 
         vecs = pts - centroid
         angles = np.arctan2(vecs[:, 1], vecs[:, 0])
-        angular_diff = np.abs((angles - anchor_angle + math.pi) % (2 * math.pi) - math.pi)
-        captured_mask = angular_diff <= half
+        # signed offset from the anchor's own direction (the "path out from
+        # the centroid"), wrapped to (-pi, pi]: negative = before the
+        # anchor, positive = after, 0 = the anchor itself. Captures the
+        # wedge on |offset| and orders the fragment on the signed value, so
+        # "before/after" is literally which side of the anchor's ray a
+        # captured point falls on, not its distance from the centroid.
+        signed_offset = (angles - anchor_angle + math.pi) % (2 * math.pi) - math.pi
+        captured_mask = np.abs(signed_offset) <= half
         captured = [i for i, m in zip(idx, captured_mask) if m]
+        captured_offsets = signed_offset[captured_mask]
 
-        captured_d = np.linalg.norm(points[captured] - centroid, axis=1)
-        fragment = [captured[i] for i in np.argsort(captured_d)]
+        fragment = [captured[i] for i in np.argsort(captured_offsets)]
         fragments.append(fragment)
         remaining.difference_update(captured)
 
