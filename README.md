@@ -439,6 +439,38 @@ the whole project once you actually push n up — a useful reminder that
 different claims, and this project's benchmarks now go far enough to
 tell them apart.
 
+### Does recomputing the centroid every cycle actually matter?
+
+Both wedge variants (`recenter=` kwarg) can skip step 1 above and just
+use the overall centroid, computed once, for every cycle instead of the
+centroid of whatever's left. Tested both ways at n=200/1,000/5,000, raw
+and after 2-opt cleanup:
+
+| n | wedge_radial raw (recenter worse by) | + 2-opt | wedge_tip raw (recenter worse by) | + 2-opt |
+|---|---|---|---|---|
+| 200 | -4.6% | recenter wins by 2.3% | -11.6% | recenter wins by 3.8% |
+| 1,000 | -9.9% | **no-recenter wins by 0.8%** | -16.5% | recenter wins by 3.2% |
+| 5,000 | -18.6% | **no-recenter wins by 0.3%** | -22.6% | recenter wins by 2.9% |
+
+Recentering clearly wins on raw construction quality, and the gap widens
+with n (up to ~23% at n=5,000) — expected, since the whole premise of the
+heuristic is "centroid of what's *left*," and a stale centroid describes
+the remaining points worse and worse as more get carved away each cycle.
+
+But that gap nearly vanishes after 2-opt: for `wedge_radial` it flips
+sign entirely (no-recenter is marginally *better* post-cleanup at
+n=1,000 and 5,000); for `wedge_tip` recentering keeps a small ~3% edge.
+
+The real difference is speed, not quality. Skipping recentering produces
+far fewer, larger fragments — fragment count stays roughly flat with n
+(17 → 17.6 → 18 for `wedge_radial` at n=200/1,000/5,000) instead of
+growing (22.6 → 34.4 → 50.6 with recentering) — and since fragment
+merging is O(F³), raw construction without recentering is 2-15× faster
+across that same range and the gap grows with n. Recentering finds a
+somewhat better starting point at real cost; 2-opt erases most of that
+advantage anyway, so for `wedge_radial` specifically, not recentering is
+close to a free win once cleanup is in the pipeline.
+
 ## Outputs
 
 Outputs land in `output/`:
